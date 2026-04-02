@@ -190,7 +190,7 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 .pw img { max-height: calc(100dvh - var(--hdr) - var(--bar)); max-width: 100%; object-fit: contain; display: block; box-shadow: 0 6px 50px rgba(0,0,0,0.9); transition: max-height 0.3s ease; user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; pointer-events: none; }
 #read-area.bar-hidden .pw img { max-height: calc(100dvh - var(--hdr)); }
 @keyframes pi { from { opacity:0; transform:translateX(14px); } to { opacity:1; transform:translateX(0); } }
-.nav-a { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 72px; background: transparent; border: none; color: transparent; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; touch-action: manipulation; border-radius: var(--r); pointer-events: none; }
+.nav-a { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 72px; background: rgba(8,8,8,0.78); border: 1.5px solid #f5f5f5; color: var(--paper); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; transition: all 0.13s; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); touch-action: manipulation; border-radius: var(--r); }
 .nav-a:hover { background: var(--red); border-color: var(--red); }
 .nav-a:disabled { opacity: 0.13; pointer-events: none; }
 #nav-prev { left: 4px; }
@@ -500,11 +500,11 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
   <div class="reader-body">
     <div id="thumbs"></div>
     <div id="read-area">
+      <button class="nav-a" id="nav-prev">◀</button>
+      <button class="nav-a" id="nav-next">▶</button>
       <div class="nav-zone nav-left" id="nav-left"></div>
       <div class="nav-zone nav-center" id="nav-center"></div>
       <div class="nav-zone nav-right" id="nav-right"></div>
-      <button class="nav-a" id="nav-prev">◀</button>
-      <button class="nav-a" id="nav-next">▶</button>
       <div id="page-display"></div>
       <div id="ch-toast"></div>
     </div>
@@ -976,6 +976,8 @@ async function openLibrary() {
 
 // FSAPI path (Chrome/Edge)
 async function openLibraryFSAPI() {
+  if (IS_TAURI) { await openLibraryTauri(); return; }
+  // Browser fallback — use File System Access API
   try {
     rootHandle = await window.showDirectoryPicker({ mode:'read' });
     library = [];
@@ -990,6 +992,60 @@ async function openLibraryFSAPI() {
     renderLibrary(); show('library'); bc('library');
     library.forEach(loadCoverFSAPI);
   } catch(e) { if(e.name!=='AbortError') console.error(e); }
+}
+
+// ── TAURI NATIVE LIBRARY ─────────────────────────────────────────────────────
+
+async function openLibraryTauri() {
+  const folderPath = await invoke('pick_folder');
+  if (!folderPath) return; // user cancelled
+  await _loadLibraryFromPath(folderPath);
+  await invoke('save_library_path', { path: folderPath });
+}
+
+async function _loadLibraryFromPath(folderPath) {
+  rootHandle = { name: folderPath.split(/[\\/]/).pop(), _path: folderPath };
+  library = [];
+  const topEntries = await invoke('read_dir', { path: folderPath });
+  const dirs = topEntries
+    .filter(e => e.is_dir)
+    .sort((a, b) => natCmp(a.name, b.name));
+  for (const dir of dirs) {
+    const chapters = await getChaptersTauri(dir.path);
+    library.push({ name: dir.name, path: dir.path, chapters, coverUrl: null });
+  }
+  renderLibrary(); show('library'); bc('library');
+  library.forEach(loadCoverTauri);
+}
+
+async function getChaptersTauri(seriesPath) {
+  const entries = await invoke('read_dir', { path: seriesPath });
+  const dirs = entries.filter(e => e.is_dir);
+  const pdfs = entries.filter(e => !e.is_dir && e.name.toLowerCase().endsWith('.pdf'));
+  dirs.sort((a, b) => chapterCmp(a.name, b.name));
+  pdfs.sort((a, b) => chapterCmp(a.name, b.name));
+  return [
+    ...dirs.map(d => ({ name: d.name, path: d.path, isPdf: false })),
+    ...pdfs.map(f => ({ name: f.name.replace(/\.pdf$/i, ''), path: f.path, isPdf: true, pdfPath: f.path })),
+  ];
+}
+
+async function loadCoverTauri(series) {
+  if (!series.chapters.length) return;
+  const ch = series.chapters[0];
+  const localFallback = async () => {
+    try {
+      const entries = await invoke('read_dir', { path: ch.path });
+      const imgs = entries
+        .filter(e => !e.is_dir && isImg(e.name))
+        .sort((a, b) => natCmp(a.name, b.name));
+      if (!imgs.length) return;
+      series.coverUrl = await invoke('read_file_as_data_url', { path: imgs[0].path });
+      const card = document.querySelector(`[data-series="${CSS.escape(series.name)}"] .s-cover`);
+      if (card) { card.innerHTML = localCoverHTML(series); attachCardExtras(card, 'local:'+series.name, series, 'local'); }
+    } catch(e) { console.warn('Tauri cover error', e); }
+  };
+  enqueueMuCover(series, localFallback);
 }
 async function getChaptersFSAPI(h) {
   const dirs = [], pdfs = [];
@@ -1421,14 +1477,34 @@ async function openLocalChapter(idx, startAtEnd=false) {
   $('page-display').innerHTML=`<div style="color:#f5f5f5;font-size:12px;margin:auto;font-family:monospace;letter-spacing:2px">LOADING…</div>`;
   $('prog').innerHTML='';
 
-  if (ch.pdfHandle) {
+  if (ch.pdfHandle || (IS_TAURI && ch.isPdf && ch.pdfPath)) {
     // PDF chapter — load all pages lazily
     $('page-display').innerHTML=`<div style="color:#f5f5f5;font-size:12px;margin:auto;font-family:monospace">LOADING PDF…</div>`;
     try {
-      const file = await ch.pdfHandle.getFile();
+      let file;
+      if (IS_TAURI && ch.pdfPath) {
+        const dataUrl = await invoke('read_file_as_data_url', { path: ch.pdfPath });
+        const res = await fetch(dataUrl);
+        const blob = await res.blob();
+        file = new File([blob], ch.name + '.pdf', { type: 'application/pdf' });
+      } else {
+        file = await ch.pdfHandle.getFile();
+      }
       pages = await pdfFileToPages(file);
     } catch(e) {
       $('page-display').innerHTML=`<div class="empty"><div class="ei">⚠</div>FAILED TO LOAD PDF</div>`;
+      return;
+    }
+  } else if (IS_TAURI && ch.path) {
+    // Tauri native FS — read files directly from disk path
+    try {
+      const entries = await invoke('read_dir', { path: ch.path });
+      const imgs = entries
+        .filter(e => !e.is_dir && isImg(e.name))
+        .sort((a, b) => natCmp(a.name, b.name));
+      pages = imgs.map(e => ({ name: e.name, filePath: e.path, url: null, revoke: false }));
+    } catch(e) {
+      $('page-display').innerHTML=`<div class="empty"><div class="ei">⚠</div>FAILED TO READ CHAPTER</div>`;
       return;
     }
   } else {
@@ -1443,10 +1519,10 @@ async function openLocalChapter(idx, startAtEnd=false) {
     const saved = getChProg('local:'+curSeries.name, ch.name);
     // Resume only if genuinely in-progress (page > 0 in LTR, or page < last in RTL)
     const inProgress = saved && !saved.read && saved.page > 0 && saved.page < pages.length - 1;
-    curPage = inProgress ? saved.page : 0;
+    curPage = inProgress ? saved.page : (rtl ? Math.max(0, pages.length - 1) : 0);
   } else {
     // Arriving from the previous chapter — land at the reading-direction "end"
-    curPage = 0;
+    curPage = rtl ? 0 : Math.max(0, pages.length - 1);
   }
   zoom=1;
   const preIdx=startAtEnd ? [curPage, curPage-1, curPage-2] : [curPage, curPage+1, curPage+2];
@@ -1458,6 +1534,8 @@ async function preloadLocal(idxs) {
     if (i<0||i>=pages.length||pages[i].url) return;
     if (pages[i].pdfDoc) {
       await preloadPdfPage(pages[i]);
+    } else if (IS_TAURI && pages[i].filePath) {
+      pages[i].url = await invoke('read_file_as_data_url', { path: pages[i].filePath });
     } else if (pages[i].handle) {
       const f=await pages[i].handle.getFile();
       pages[i].url=URL.createObjectURL(f);
@@ -1515,8 +1593,8 @@ function renderPage() {
   // Sync thumbnail highlight
   document.querySelectorAll('.thumb').forEach(t=>t.classList.remove('on'));
   const at=$('th-'+curPage); if(at){at.classList.add('on');at.scrollIntoView({block:'nearest'});}
-  $('nav-prev').disabled = curPage <= 0;
-  $('nav-next').disabled = curPage >= pages.length - 1;
+  $('nav-prev').disabled=rtl?curPage>=pages.length-1:curPage<=0;
+  $('nav-next').disabled=rtl?curPage<=0:curPage>=pages.length-1;
 }
 
 function spreadIdxs() {
@@ -1529,14 +1607,13 @@ function spreadIdxs() {
 function renderProgressSegs() {
   const prog = $('prog');
   prog.innerHTML = '';
-  const order = rtl ? [...Array(pages.length).keys()].reverse() : [...Array(pages.length).keys()];
-  order.forEach(i => {
+  for (let i = 0; i < pages.length; i++) {
     const seg = document.createElement('div');
     seg.className = 'prog-seg';
     seg.id = 'ps-' + i;
     seg.onclick = (e) => { e.stopPropagation(); jump(i); };
     prog.appendChild(seg);
-  });
+  }
 }
 
 /** Updates the bottom status bar. */
@@ -1590,18 +1667,28 @@ function goPrevChapter() {
 }
 
 function goNext() {
-  const s = spread ? 2 : 1;
-  if (curPage < pages.length - 1) jump(Math.min(pages.length - 1, curPage + s));
-  else goNextChapter();
+  const s=spread?2:1;
+  if (rtl) {
+    if (curPage > 0) jump(Math.max(0, curPage-s));
+    else goNextChapter();
+  } else {
+    if (curPage < pages.length-1) jump(Math.min(pages.length-1, curPage+s));
+    else goNextChapter();
+  }
 }
 function goPrev() {
-  const s = spread ? 2 : 1;
-  if (curPage > 0) jump(Math.max(0, curPage - s));
-  else goPrevChapter();
+  const s=spread?2:1;
+  if (rtl) {
+    if (curPage < pages.length-1) jump(Math.min(pages.length-1, curPage+s));
+    else goPrevChapter();
+  } else {
+    if (curPage > 0) jump(Math.max(0, curPage-s));
+    else goPrevChapter();
+  }
 }
 // Navigation zones
-$('nav-left').onclick  = () => rtl ? goNext() : goPrev();
-$('nav-right').onclick = () => rtl ? goPrev() : goNext();
+$('nav-left').onclick=goPrev;
+$('nav-right').onclick=goNext;
 // Center zone toggles reader bar visibility
 let barVisible = true;
 let theatreMode = false;
@@ -1645,8 +1732,8 @@ function _triggerTheatre() {
 }
 document.addEventListener('keydown',e=>{
   if(!$('view-reader').classList.contains('active'))return;
-  if(e.key==='ArrowRight'||e.key==='ArrowDown') rtl ? goPrev() : goNext();
-  if(e.key==='ArrowLeft' ||e.key==='ArrowUp')   rtl ? goNext() : goPrev();
+  if(e.key==='ArrowRight'||e.key==='ArrowDown') goNext();
+  if(e.key==='ArrowLeft' ||e.key==='ArrowUp')   goPrev();
   if(e.key==='+'||e.key==='=') adjZ(ZSTEP);
   if(e.key==='-')              adjZ(-ZSTEP);
   if(e.key==='0')              {zoom=1;applyZ();}
@@ -1670,10 +1757,7 @@ $('read-area').addEventListener('touchend',e=>{
   const elapsed=Date.now()-tsT;
   // Cancel if vertical movement dominates OR swipe is too slow
   if(Math.abs(dy)>Math.abs(dx)){ts=null;return;}
-  if(Math.abs(dx)>50&&Math.abs(dx)/elapsed>0.25) {
-  if (rtl) dx>0?goPrev():goNext();
-  else dx>0?goNext():goPrev();
-  }
+  if(Math.abs(dx)>50&&Math.abs(dx)/elapsed>0.25)dx>0?goNext():goPrev();
   ts=null; tsY=null; tsT=null;
 });
 $('prog').onclick=function(e){ if(!pages.length)return; jump(Math.round((e.offsetX/this.offsetWidth)*(pages.length-1))); };
@@ -1896,6 +1980,19 @@ document.querySelector('.logo').onclick = () => {
 };
 bc('landing');
 show('landing');
+
+// ── TAURI: Auto-reopen library on launch ─────────────────────────────────────
+if (IS_TAURI) {
+  invoke('load_library_path').then(async savedPath => {
+    if (!savedPath) return;
+    try {
+      await _loadLibraryFromPath(savedPath);
+    } catch(e) {
+      // Path no longer exists — silently stay on landing screen
+      console.warn('Saved library path no longer accessible:', savedPath);
+    }
+  }).catch(() => {});
+}
 </script>
 
 
