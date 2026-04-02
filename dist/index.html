@@ -186,11 +186,13 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 .thumb.on .thumb-n { color: var(--red); }
 #read-area { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; min-width: 0; }
 #page-display { display: flex; align-items: center; justify-content: center; gap: 2px; height: 100%; width: 100%; padding: 8px 50px; }
-.pw { max-height: 100%; display: flex; align-items: center; animation: pi 0.16s ease; }
+.pw { max-height: 100%; display: flex; align-items: center; animation: pi-ltr 0.16s ease; }
+.rtl-mode .pw { animation: pi-rtl 0.16s ease; }
 .pw img { max-height: calc(100dvh - var(--hdr) - var(--bar)); max-width: 100%; object-fit: contain; display: block; box-shadow: 0 6px 50px rgba(0,0,0,0.9); transition: max-height 0.3s ease; user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; pointer-events: none; }
 #read-area.bar-hidden .pw img { max-height: calc(100dvh - var(--hdr)); }
-@keyframes pi { from { opacity:0; transform:translateX(14px); } to { opacity:1; transform:translateX(0); } }
-.nav-a { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 72px; background: rgba(8,8,8,0.78); border: 1.5px solid #f5f5f5; color: var(--paper); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; transition: all 0.13s; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); touch-action: manipulation; border-radius: var(--r); }
+@keyframes pi-ltr { from { opacity:0; transform:translateX(14px); } to { opacity:1; transform:translateX(0); } }
+@keyframes pi-rtl { from { opacity:0; transform:translateX(-14px); } to { opacity:1; transform:translateX(0); } }
+.nav-a { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 72px; background: transparent; border: none; color: transparent; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; touch-action: manipulation; border-radius: var(--r); pointer-events: none; }
 .nav-a:hover { background: var(--red); border-color: var(--red); }
 .nav-a:disabled { opacity: 0.13; pointer-events: none; }
 #nav-prev { left: 4px; }
@@ -895,9 +897,23 @@ async function _drainMuCoverQ() {
     const { series: s, fallback } = _muCoverQ.shift();
     const info = await fetchMuInfo(s.name);
     if (info?.thumb || info?.image) {
-      // MU has a cover — always use it (it's proper cover art)
-      s.coverUrl = info.image || info.thumb;
-      s.muInfo   = info;
+      // MU has a cover — cache it natively in Tauri, use URL directly in browser
+      const rawUrl = info.image || info.thumb;
+      if (IS_TAURI && info.id) {
+        try {
+          s.coverUrl = await invoke('cache_cover', {
+            url: rawUrl,
+            seriesId: String(info.id),
+          });
+        } catch(e) {
+          // Cache failed — fall back to direct URL
+          console.warn('[cover cache] failed for', s.name, e);
+          s.coverUrl = rawUrl;
+        }
+      } else {
+        s.coverUrl = rawUrl;
+      }
+      s.muInfo = info;
       const card = document.querySelector(`[data-series="${CSS.escape(s.name)}"] .s-cover`);
       if (card) { card.innerHTML = localCoverHTML(s); attachCardExtras(card, 'local:'+s.name, s, 'local'); }
     } else if (fallback) {
@@ -1461,8 +1477,24 @@ async function countPages(ch) {
       return doc.numPages;
     } catch(e) { return 0; }
   }
-  let n=0;
-  for await (const [nm,hh] of ch.handle.entries()) if(hh.kind==='file'&&isImg(nm)) n++;
+  if (IS_TAURI && ch.isPdf && ch.pdfPath) {
+    try {
+      const dataUrl = await invoke('read_file_as_data_url', { path: ch.pdfPath });
+      const res = await fetch(dataUrl);
+      const ab = await res.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({ data: ab }).promise;
+      return doc.numPages;
+    } catch(e) { return 0; }
+  }
+  if (IS_TAURI && ch.path) {
+    try {
+      const entries = await invoke('read_dir', { path: ch.path });
+      return entries.filter(e => !e.is_dir && isImg(e.name)).length;
+    } catch(e) { return 0; }
+  }
+  if (!ch.handle) return 0;
+  let n = 0;
+  for await (const [nm, hh] of ch.handle.entries()) if (hh.kind==='file' && isImg(nm)) n++;
   return n;
 }
 
@@ -1574,6 +1606,7 @@ function renderThumbs() {
 /** Renders the active page (or spread pair) in the reading area. */
 const CONN_LOST_SVG = 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#111"/><text x="200" y="290" text-anchor="middle" fill="#b89ee8" font-family="monospace" font-size="13">CONNECTION LOST</text><text x="200" y="315" text-anchor="middle" fill="#9690a2" font-family="monospace" font-size="11">Proxy error — check node proxy.js</text></svg>');
 function renderPage() {
+  $('read-area').classList.toggle('rtl-mode', rtl);
   const display=$('page-display'); display.innerHTML='';
   const idxs=spreadIdxs();
   const order=rtl?[...idxs].reverse():idxs;
@@ -1593,8 +1626,8 @@ function renderPage() {
   // Sync thumbnail highlight
   document.querySelectorAll('.thumb').forEach(t=>t.classList.remove('on'));
   const at=$('th-'+curPage); if(at){at.classList.add('on');at.scrollIntoView({block:'nearest'});}
-  $('nav-prev').disabled=rtl?curPage>=pages.length-1:curPage<=0;
-  $('nav-next').disabled=rtl?curPage<=0:curPage>=pages.length-1;
+  $('nav-prev').disabled = curPage <= 0;
+  $('nav-next').disabled = curPage >= pages.length - 1;
 }
 
 function spreadIdxs() {
@@ -1607,13 +1640,14 @@ function spreadIdxs() {
 function renderProgressSegs() {
   const prog = $('prog');
   prog.innerHTML = '';
-  for (let i = 0; i < pages.length; i++) {
+  const order = rtl ? [...Array(pages.length).keys()].reverse() : [...Array(pages.length).keys()];
+  order.forEach(i => {
     const seg = document.createElement('div');
     seg.className = 'prog-seg';
     seg.id = 'ps-' + i;
     seg.onclick = (e) => { e.stopPropagation(); jump(i); };
     prog.appendChild(seg);
-  }
+  });
 }
 
 /** Updates the bottom status bar. */
@@ -1631,7 +1665,11 @@ function stat() {
   for (let i = 0; i < pages.length; i++) {
     const seg = $('ps-' + i);
     if (!seg) continue;
-    seg.className = 'prog-seg' + (i < curPage ? ' done' : i === curPage ? ' current' : '');
+    if (rtl) {
+  seg.className = 'prog-seg' + (i > curPage ? ' done' : i === curPage ? ' current' : '');
+} else {
+  seg.className = 'prog-seg' + (i < curPage ? ' done' : i === curPage ? ' current' : '');
+}
   }
   $('ztxt').textContent=Math.round(zoom*100)+'%';
 }
@@ -1687,8 +1725,8 @@ function goPrev() {
   }
 }
 // Navigation zones
-$('nav-left').onclick=goPrev;
-$('nav-right').onclick=goNext;
+$('nav-left').onclick  = () => rtl ? goNext() : goPrev();
+$('nav-right').onclick = () => rtl ? goPrev() : goNext();
 // Center zone toggles reader bar visibility
 let barVisible = true;
 let theatreMode = false;
@@ -1732,8 +1770,8 @@ function _triggerTheatre() {
 }
 document.addEventListener('keydown',e=>{
   if(!$('view-reader').classList.contains('active'))return;
-  if(e.key==='ArrowRight'||e.key==='ArrowDown') goNext();
-  if(e.key==='ArrowLeft' ||e.key==='ArrowUp')   goPrev();
+  if(e.key==='ArrowRight'||e.key==='ArrowDown') rtl ? goPrev() : goNext();
+  if(e.key==='ArrowLeft' ||e.key==='ArrowUp')   rtl ? goNext() : goPrev();
   if(e.key==='+'||e.key==='=') adjZ(ZSTEP);
   if(e.key==='-')              adjZ(-ZSTEP);
   if(e.key==='0')              {zoom=1;applyZ();}
@@ -1757,7 +1795,10 @@ $('read-area').addEventListener('touchend',e=>{
   const elapsed=Date.now()-tsT;
   // Cancel if vertical movement dominates OR swipe is too slow
   if(Math.abs(dy)>Math.abs(dx)){ts=null;return;}
-  if(Math.abs(dx)>50&&Math.abs(dx)/elapsed>0.25)dx>0?goNext():goPrev();
+  if(Math.abs(dx)>50&&Math.abs(dx)/elapsed>0.25) {
+  if (rtl) dx>0?goPrev():goNext();
+  else dx>0?goNext():goPrev();
+}
   ts=null; tsY=null; tsT=null;
 });
 $('prog').onclick=function(e){ if(!pages.length)return; jump(Math.round((e.offsetX/this.offsetWidth)*(pages.length-1))); };
@@ -1897,6 +1938,11 @@ function renderIdentifyResults(results) {
 function applyMuOverride(rec) {
   if (!_identifySeries) return;
   const key = _identifySeries.name;
+  // Delete the old cached cover so it re-downloads for the new series
+  const oldInfo = muCache[key];
+  if (IS_TAURI && oldInfo?.id) {
+    invoke('delete_cached_cover', { seriesId: String(oldInfo.id) }).catch(() => {});
+  }
   muOverrides[key] = { title: rec.title, seriesId: rec.series_id };
   saveOverrides();
   delete muCache[key];
@@ -1910,6 +1956,11 @@ function applyMuOverride(rec) {
 function clearMuOverride() {
   if (!_identifySeries) return;
   const key = _identifySeries.name;
+  // Delete cached cover so it re-downloads without the override
+  const oldInfo = muCache[key];
+  if (IS_TAURI && oldInfo?.id) {
+    invoke('delete_cached_cover', { seriesId: String(oldInfo.id) }).catch(() => {});
+  }
   delete muOverrides[key];
   saveOverrides();
   delete muCache[key];

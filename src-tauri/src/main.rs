@@ -159,6 +159,98 @@ async fn read_file_as_data_url(path: String) -> Result<String, String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// COVER IMAGE CACHE
+// Downloads MU cover images to app-data/covers/ on first fetch.
+// Returns a base64 data URL so the WebView never hits the network
+// again for the same cover. Survives app restarts indefinitely.
+// The identify override calls delete_cached_cover to force a
+// fresh download when the user switches to a different series.
+// ═══════════════════════════════════════════════════════════════
+
+fn covers_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("covers");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Downloads a cover image and caches it to disk.
+/// On subsequent calls for the same series_id the cached file is
+/// returned immediately without any network request.
+#[command]
+async fn cache_cover(
+    app: AppHandle,
+    url: String,
+    series_id: String,
+) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let ext = url.rsplit('.').next().unwrap_or("jpg").to_lowercase();
+    let safe_ext = match ext.as_str() {
+        "png" => "png",
+        "webp" => "webp",
+        "gif" => "gif",
+        _ => "jpg",
+    };
+
+    let cache_path = covers_dir(&app)?.join(format!("{}.{}", series_id, safe_ext));
+
+    // Return cached version if it already exists on disk
+    if cache_path.exists() {
+        let bytes = fs::read(&cache_path).map_err(|e| e.to_string())?;
+        let mime = mime_for_ext(safe_ext);
+        return Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)));
+    }
+
+    // Download from MU CDN
+    let client = reqwest::Client::builder()
+        .user_agent("NeruYomi/0.48B")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let bytes = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("cover download failed: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("cover read failed: {e}"))?;
+
+    // Write to disk
+    fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
+
+    let mime = mime_for_ext(safe_ext);
+    Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)))
+}
+
+/// Deletes a cached cover so it will be re-downloaded on next open.
+/// Called by the identify override when the user picks a different series.
+#[command]
+async fn delete_cached_cover(app: AppHandle, series_id: String) -> Result<(), String> {
+    let dir = covers_dir(&app)?;
+    for ext in &["jpg", "png", "webp", "gif"] {
+        let p = dir.join(format!("{}.{}", series_id, ext));
+        if p.exists() {
+            fs::remove_file(p).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn mime_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "png"  => "image/png",
+        "webp" => "image/webp",
+        "gif"  => "image/gif",
+        _      => "image/jpeg",
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════════════════════════
 
@@ -177,6 +269,9 @@ fn main() {
             pick_folder,
             read_dir,
             read_file_as_data_url,
+            // Cover image cache
+            cache_cover,
+            delete_cached_cover,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NeruYomi");
