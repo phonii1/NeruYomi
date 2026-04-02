@@ -142,35 +142,63 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 .s-name:hover { position: absolute; bottom: 0; left: 0; right: 0; overflow: visible; -webkit-line-clamp: unset; white-space: normal; word-break: break-word; background: #252131; border: 1px solid #2a2839; border-top: 1px solid #161520; z-index: 10; box-shadow: 0 -4px 12px rgba(0,0,0,0.6); }
 
 
-/* ── CHAPTER LISTS (shared) ── */
+/* ── CHAPTER VIEW ── */
 #view-chapters { flex-direction: column; }
-.ch-header { display: flex; align-items: flex-start; gap: 14px; padding: 14px; border-bottom: var(--border); flex-shrink: 0; }
-.hero-img { width: 100px; height: 140px; background: #100f18; border: 2px solid #f5f5f5; overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #f5f5f5; border-radius: var(--r); }
+
+/* Series header */
+.ch-header { display: flex; gap: 16px; padding: 18px 20px; border-bottom: var(--border); flex-shrink: 0; background: #1a1826; }
+.hero-img { width: 120px; height: 170px; background: #100f18; border: 2px solid #2a2839; overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #f5f5f5; border-radius: var(--r); }
 .hero-img img { width: 100%; height: 100%; object-fit: cover; }
-.series-meta { flex: 1; min-width: 0; }
-.series-title-big { font-family: var(--f-hdr); font-weight: 700; font-size: 19px; letter-spacing: 1px; color: var(--white); line-height: 1.2; margin-bottom: 4px; }
-.series-stat { font-family: var(--f-hdr); font-weight: 700; font-size: 13px; color: #f5f5f5; letter-spacing: 0.5px; }
+.series-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.series-title-big { font-family: var(--f-hdr); font-weight: 700; font-size: 20px; letter-spacing: 0.5px; color: var(--white); line-height: 1.3; }
+.series-stat { font-family: var(--f-hdr); font-weight: 700; font-size: 12px; color: #6b6478; letter-spacing: 0.5px; }
 .series-stat b { color: var(--red); }
-/* MangaUpdates meta rows */
-.mu-meta-row { font-family: var(--f-hdr); font-weight: 700; font-size: 13px; color: #f5f5f5; letter-spacing: 0.5px; margin-top: 3px; }
-.mu-meta-row b { color: var(--red); }
-.mu-desc { font-family: var(--f-body); font-size: 13px; color: #9690a2; letter-spacing: 0.3px; line-height: 1.8; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; margin-top: 5px; }
-.mu-genres { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
-.mu-genre { font-family: var(--f-hdr); font-weight: 700; font-size: 11px; letter-spacing: 0.5px; padding: 3px 7px; background: transparent; border: 1px solid #2b2933; color: #9690a2; border-radius: var(--r-sm); }
-.mu-link { font-family: var(--f-hdr); font-weight: 700; font-size: 11px; letter-spacing: 0.5px; color: #3a3748; text-decoration: none; margin-top: 5px; display: inline-block; transition: color 0.12s; }
+
+/* MU meta */
+.mu-meta-row { font-family: var(--f-hdr); font-weight: 700; font-size: 12px; color: #9690a2; letter-spacing: 0.3px; }
+.mu-meta-row b { color: var(--paper); }
+.mu-desc { font-family: var(--f-body); font-size: 12px; color: #6b6478; letter-spacing: 0.3px; line-height: 1.7; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.mu-genres { display: flex; flex-wrap: wrap; gap: 4px; }
+.mu-genre { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; padding: 2px 8px; background: transparent; border: 1px solid #2b2933; color: #6b6478; border-radius: 20px; }
+.mu-link { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; color: #3a3748; text-decoration: none; display: inline-block; transition: color 0.12s; }
 .mu-link:hover { color: var(--red); }
-.mu-fetching { font-family: var(--f-hdr); font-weight: 700; font-size: 11px; letter-spacing: 0.5px; color: #3a3748; margin-top: 5px; }
+.mu-fetching { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; color: #3a3748; }
+
+/* Chapter list */
 .ch-list { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--red) #27252d; }
 .ch-list::-webkit-scrollbar { width: 4px; }
 .ch-list::-webkit-scrollbar-thumb { background: var(--red); }
-.ch-item { display: flex; align-items: center; padding: 15px 14px; border-bottom: var(--border); cursor: pointer; transition: background 0.1s; gap: 10px; touch-action: manipulation; min-height: 52px; }
+
+/* Volume group header */
+.vol-group { border-bottom: 2px solid #1e1c2a; }
+.vol-header { display: flex; align-items: center; padding: 10px 20px; background: #1e1c2a; cursor: pointer; user-select: none; gap: 12px; }
+.vol-header:hover { background: #232131; }
+.vol-header-label { font-family: var(--f-hdr); font-weight: 700; font-size: 12px; color: var(--paper); letter-spacing: 0.8px; text-transform: uppercase; flex: 1; }
+.vol-header-range { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.5px; }
+.vol-header-count { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.5px; background: #27252e; padding: 2px 7px; border-radius: 10px; }
+.vol-chevron { font-size: 9px; color: #6b6478; transition: transform 0.2s; }
+.vol-group.collapsed .vol-chevron { transform: rotate(-90deg); }
+.vol-group.collapsed .ch-item { display: none; }
+
+/* Chapter row */
+.ch-item { display: flex; flex-direction: column; padding: 9px 20px; border-bottom: var(--border); cursor: pointer; transition: background 0.1s; touch-action: manipulation; }
 .ch-item:hover, .ch-item:active { background: #0c0b14; }
+.ch-item.ch-read { opacity: 0.5; }
+.ch-item.ch-in-progress .ch-top-title { color: var(--red); }
+.ch-top { display: flex; align-items: center; gap: 8px; width: 100%; }
+.ch-num  { font-family: var(--f-hdr); font-weight: 700; font-size: 11px; color: var(--red); letter-spacing: 0.5px; flex-shrink: 0; min-width: 52px; }
+.ch-top-title { flex: 1; font-family: var(--f-body); font-size: 13px; color: var(--paper); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ch-top-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.ch-pg { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.5px; }
+.ch-read-check { font-size: 11px; color: #27ae60; }
+.ch-prog-tag { font-family: var(--f-hdr); font-weight: 700; font-size: 9px; color: var(--red); letter-spacing: 0.5px; padding: 1px 5px; border: 1px solid var(--red); border-radius: var(--r-sm); }
+.ch-mark-btn { background: transparent; border: none; color: #3a3748; font-size: 12px; cursor: pointer; padding: 0 2px; flex-shrink: 0; transition: color 0.12s; }
+.ch-mark-btn:hover { color: #27ae60; }
+.ch-item.ch-read .ch-mark-btn { color: #27ae60; }
+.ch-arr { color: #3a3748; font-size: 11px; flex-shrink: 0; transition: color 0.12s; }
 .ch-item:hover .ch-arr, .ch-item:active .ch-arr { color: var(--red); }
-.ch-num  { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: var(--red); letter-spacing: 0.5px; min-width: 48px; flex-shrink: 0; }
-.ch-name { flex: 1; font-family: var(--f-body); font-size: 18px; letter-spacing: 0.3px; color: var(--paper); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ch-pg   { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #f5f5f5; letter-spacing: 0.5px; flex-shrink: 0; }
-.ch-grp  { font-family: var(--f-body); font-size: 15px; color: #f5f5f5; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px; }
-.ch-arr  { color: #f5f5f5; font-size: 12px; transition: color 0.12s; flex-shrink: 0; }
+.ch-bot { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding-left: 60px; }
+.ch-group-name { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.3px; }
 
 /* ── READER ── */
 #view-reader { flex-direction: column; }
@@ -355,9 +383,8 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
   .page-jump-input { width: 40px; font-size: 10px; }
 
   /* chapter list: larger tap targets */
-  .ch-item { padding: 14px 12px; }
-  .ch-grp { display: none; }
-
+  .ch-item { padding: 8px 12px; }
+  
   }
 
 
@@ -405,9 +432,7 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
 .mu-link          { font-size: 13px; }
 .mu-fetching      { font-size: 13px; }
 .ch-num           { font-size: 11px; }
-.ch-name          { font-size: 20px; }
 .ch-pg            { font-size: 11px; }
-.ch-grp           { font-size: 17px; }
 .ch-arr           { font-size: 13px; }
 /* Reader */
 .thumb-n          { font-size: 10px; }
@@ -434,6 +459,15 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
 .settings-title   { font-size: 18px; }
 .settings-label   { font-size: 13px; }
 .settings-select  { font-size: 13px; }
+
+/* Volume group header */
+.vol-header { display: flex; align-items: center; padding: 10px 14px 6px; background: #1e1c2a; border-bottom: 1px solid #2a2839; cursor: pointer; user-select: none; }
+.vol-header-label { font-family: var(--f-hdr); font-weight: 700; font-size: 11px; color: var(--paper); letter-spacing: 1px; text-transform: uppercase; flex: 1; }
+.vol-header-range { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.5px; margin-right: 10px; }
+.vol-header-count { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.5px; margin-right: 6px; }
+.vol-chevron { font-size: 10px; color: #6b6478; transition: transform 0.2s; }
+.vol-group.collapsed .vol-chevron { transform: rotate(-90deg); }
+.vol-group.collapsed .ch-item { display: none; }
 </style>
 </head>
 <body>
@@ -1373,14 +1407,23 @@ function renderLocalSearchPreview(q) {
   prev.classList.add('show');
 }
 
+function cleanChName(raw) {
+  return raw
+    .replace(/^vol\.?\s*\d+[\s._-]*/i, '')        // remove Vol.01
+    .replace(/^ch\.?\s*[\d.]+[\s._-]*/i, '')       // remove Ch.0001 -
+    .replace(/\s*\((?:en|jp|es|fr|de|ko|zh)\)/gi, '') // remove (en)
+    .replace(/\s*\[[^\]]+\]\s*$/g, '')              // remove [Group Name]
+    .trim();
+}
+
 // Local series → chapter list
 async function openSeries(series) {
-  curSeries=series; show('chapters'); bc('chapters');
-  $('stitle').textContent=series.name;
-  $('sstat').innerHTML=`<b>${series.chapters.length}</b> CHAPTERS`;
-  $('hero').innerHTML=series.coverUrl?`<img src="${series.coverUrl}" alt="">`:'📖';
+  curSeries = series; show('chapters'); bc('chapters');
+  $('stitle').textContent = series.name;
+  $('sstat').innerHTML = `<b>${series.chapters.length}</b> CHAPTERS`;
+  $('hero').innerHTML = series.coverUrl ? `<img src="${series.coverUrl}" alt="">` : '📖';
 
-  // Reset MU meta UI
+  // Reset MU meta
   $('mu-meta').style.display    = 'none';
   $('mu-fetching').style.display = 'none';
   $('mu-author').textContent  = '';
@@ -1391,17 +1434,15 @@ async function openSeries(series) {
 
   const sKey = 'local:' + series.name;
 
-  // ── Continue / progress row ──
+  // Continue / progress button
   const { readCount, pct } = seriesReadStats(sKey, series.chapters.length);
   const localCW = $('local-continue-wrap'); localCW.innerHTML = '';
   if (series.chapters.length) {
     const { idx: contIdx, page: contPage, state: contState } = findContinueIdx(sKey, series.chapters, ch => ch.name);
-    const contCh = series.chapters[contIdx];
+    const contCh    = series.chapters[contIdx];
     const contLabel = contState === 'complete' ? '↩ REREAD' : contState === 'progress' ? 'CONTINUE' : 'START READING';
-    const contSub   = contState === 'progress' ? ` — ${contCh.name} · p.${contPage + 1}` : contState === 'complete' ? '' : ` — ${contCh.name}`;
+    const contSub   = contState === 'progress' ? ` — Ch.${contIdx + 1} · p.${contPage + 1}` : '';
     renderContinueBtn(localCW, contLabel, contSub, () => openLocalChapter(contIdx));
-
-    // progress stats row
     if (readCount > 0) {
       const row = document.createElement('div'); row.className = 'series-prog-row';
       row.innerHTML = `<div class="series-prog-bar"><div class="series-prog-fill" style="width:${pct*100}%"></div></div><span class="series-prog-txt">${readCount} / ${series.chapters.length} READ</span>`;
@@ -1409,64 +1450,129 @@ async function openSeries(series) {
     }
   }
 
-  const list=$('ch-list'); list.innerHTML='';
-  if (!series.chapters.length) { list.innerHTML=`<div class="empty"><div class="ei">📂</div>NO CHAPTER FOLDERS</div>`; return; }
-  series.chapters.forEach((ch,i)=>{
-    const p = getChProg(sKey, ch.name);
-    const isRead = p?.read;
-    const inProg = p && !p.read && p.page > 0;
-    const item=document.createElement('div');
-    item.className='ch-item' + (isRead ? ' ch-read' : '') + (inProg ? ' ch-in-progress' : '');
-    // Build a label from the parsed vol/chapter numbers instead of a raw index
-    const [vol, chNum] = parseChapterKey(ch.name);
-    const chStr  = Number.isFinite(chNum) && chNum >= 0
-                 ? (chNum % 1 === 0 ? String(chNum) : chNum.toFixed(1))
-                 : String(i+1);
-    const label  = vol > 0 ? `V${vol} CH ${chStr}` : `CH ${chStr}`;
-    item.innerHTML=`<span class="ch-num">${label}</span><span class="ch-name">${ch.name}</span><span class="ch-pg" id="cp-${i}">— PGS</span>${inProg ? `<span class="ch-prog-tag">p.${p.page+1}</span>` : ''}${isRead ? '<span class="ch-read-check">✓</span>' : ''}<button class="ch-mark-btn" title="Toggle read">${isRead ? '✓' : '○'}</button><span class="ch-arr">▶</span>`;
-    const markBtn = item.querySelector('.ch-mark-btn');
-    markBtn.onclick = e => { e.stopPropagation(); toggleChRead(sKey, ch.name, null, markBtn); };
-    item.onclick=()=>openLocalChapter(i); list.appendChild(item);
-    countPages(ch).then(n=>{const el=$(`cp-${i}`);if(el)el.textContent=`${n} PGS`;});
+  renderChapterList(series, sKey);
+
+  // Fetch MangaUpdates
+  const cached = Object.prototype.hasOwnProperty.call(muCache, series.name) ? muCache[series.name] : undefined;
+  if (cached === undefined) $('mu-fetching').style.display = '';
+  fetchMuInfo(series.name).then(info => {
+    $('mu-fetching').style.display = 'none';
+    if (!info) return;
+    series.muInfo = info;
+    if (info.image || info.thumb) {
+      const muCover = info.image || info.thumb;
+      series.coverUrl = muCover;
+      $('hero').innerHTML = `<img src="${muCover}" alt="">`;
+      const card = document.querySelector(`[data-series="${CSS.escape(series.name)}"] .s-cover`);
+      if (card) { card.innerHTML = localCoverHTML(series); attachCardExtras(card, 'local:' + series.name, series, 'local'); }
+    }
+    if (info.authors) $('mu-author').innerHTML = `AUTHOR: <b>${info.authors}</b>`;
+    let statusStr = info.status || '';
+    if (info.year)   statusStr += (statusStr ? ' · ' : '') + info.year;
+    if (info.rating) statusStr += (statusStr ? ' · ' : '') + `★ ${info.rating}`;
+    if (statusStr)   $('mu-status').innerHTML = `STATUS: <b>${statusStr}</b>`;
+    if (info.description) $('mu-desc').textContent = info.description;
+    if (info.genres.length) $('mu-genres').innerHTML = info.genres.map(g => `<span class="mu-genre">${g}</span>`).join('');
+    $('mu-link').href = info.url;
+    $('mu-meta').style.display = '';
+  });
+}
+
+/** Strips Vol/Ch prefix, language tag, and group name from a folder name */
+function cleanChTitle(raw) {
+  return raw
+    .replace(/^vol(?:ume)?[\s._-]*\d+[\s._-]*/i, '')
+    .replace(/^ch(?:apter)?[\s._-]*[\d.]+[\s._-]*/i, '')
+    .replace(/\s*\((?:en|jp|es|fr|de|ko|zh|pt|ru|ar|it|pl)\)/gi, '')
+    .replace(/\s*\[[^\]]+\]\s*$/g, '')
+    .trim();
+}
+
+/** Extracts group name from [Group Name] at end of folder name */
+function extractGroup(raw) {
+  const m = raw.match(/\[([^\]]+)\]\s*$/);
+  return m ? m[1] : '';
+}
+
+/** Renders the chapter list with volume group headers */
+function renderChapterList(series, sKey) {
+  const list = $('ch-list'); list.innerHTML = '';
+  if (!series.chapters.length) {
+    list.innerHTML = `<div class="empty"><div class="ei">📂</div>NO CHAPTERS FOUND</div>`;
+    return;
+  }
+
+  // Group by volume
+  const volMap = new Map();
+  series.chapters.forEach((ch, i) => {
+    const [vol] = parseChapterKey(ch.name);
+    const key = vol > 0 ? vol : 0;
+    if (!volMap.has(key)) volMap.set(key, []);
+    volMap.get(key).push({ ch, i });
   });
 
-  // ── Fetch MangaUpdates info ──
-  // Use cached result immediately if available; otherwise show spinner
-  const cached = Object.prototype.hasOwnProperty.call(muCache, series.name)
-               ? muCache[series.name]
-               : undefined;
-  if (cached === undefined) $('mu-fetching').style.display = '';
+  const volKeys = [...volMap.keys()].sort((a, b) => a - b);
 
-  const info = series.muInfo || await fetchMuInfo(series.name);
-  $('mu-fetching').style.display = 'none';
+  volKeys.forEach(vol => {
+    const entries = volMap.get(vol);
+    const firstNum = parseChapterKey(entries[0].ch.name)[1];
+    const lastNum  = parseChapterKey(entries[entries.length - 1].ch.name)[1];
+    const fmtNum   = n => Number.isFinite(n) ? (n % 1 === 0 ? String(n) : n.toFixed(1)) : '?';
+    const chRange  = entries.length > 1
+      ? `Ch. ${fmtNum(firstNum)} – ${fmtNum(lastNum)}`
+      : `Ch. ${fmtNum(firstNum)}`;
 
-  if (!info) return; // not found on MU
+    const group = document.createElement('div');
+    group.className = 'vol-group';
 
-  // Store on the series object so the next open is instant
-  series.muInfo = info;
+    const header = document.createElement('div');
+    header.className = 'vol-header';
+    header.innerHTML = `
+      <span class="vol-header-label">${vol > 0 ? `Volume ${vol}` : 'Chapters'}</span>
+      <span class="vol-header-range">${chRange}</span>
+      <span class="vol-header-count">${entries.length}</span>
+      <span class="vol-chevron">▲</span>`;
+    header.onclick = () => group.classList.toggle('collapsed');
+    group.appendChild(header);
 
-  // MU cover is always preferred — overwrite local chapter-page covers
-  if (info.image || info.thumb) {
-    const muCover = info.image || info.thumb;
-    series.coverUrl = muCover;
-    $('hero').innerHTML = `<img src="${muCover}" alt="">`;
-    // Keep the grid card in sync too
-    const card = document.querySelector(`[data-series="${CSS.escape(series.name)}"] .s-cover`);
-    if (card) { card.innerHTML = localCoverHTML(series); attachCardExtras(card, 'local:'+series.name, series, 'local'); }
-  }
+    entries.forEach(({ ch, i }) => {
+      const p       = getChProg(sKey, ch.name);
+      const isRead  = p?.read;
+      const inProg  = p && !p.read && p.page > 0;
 
-  // Populate meta rows
-  if (info.authors) $('mu-author').innerHTML = `AUTHOR: <b>${info.authors}</b>`;
-  let statusStr = info.status || '';
-  if (info.year)   statusStr += (statusStr ? '  ·  ' : '') + info.year;
-  if (info.rating) statusStr += (statusStr ? '  ·  ' : '') + `★ ${info.rating}`;
-  if (statusStr)   $('mu-status').innerHTML = `STATUS: <b>${statusStr}</b>`;
-  if (info.description) $('mu-desc').textContent = info.description;
-  if (info.genres.length) {
-    $('mu-genres').innerHTML = info.genres.map(g => `<span class="mu-genre">${g}</span>`).join('');
-  }
-  $('mu-link').href = info.url;
-  $('mu-meta').style.display = '';
+      const [, chNum] = parseChapterKey(ch.name);
+      const chStr = Number.isFinite(chNum) && chNum >= 0
+        ? (chNum % 1 === 0 ? String(chNum) : chNum.toFixed(1))
+        : String(i + 1);
+      const label = vol > 0 ? `V${vol} CH ${chStr}` : `CH ${chStr}`;
+      const title = cleanChTitle(ch.name) || (Number.isFinite(chNum) && chNum >= 0 ? `Chapter ${chStr}` : `Chapter ${i + 1}`);
+      const group_ = extractGroup(ch.name);
+
+      const item = document.createElement('div');
+      item.className = 'ch-item' + (isRead ? ' ch-read' : '') + (inProg ? ' ch-in-progress' : '');
+      item.innerHTML = `
+        <div class="ch-top">
+          <span class="ch-num">${label}</span>
+          <span class="ch-top-title">${title}</span>
+          ${inProg ? `<span class="ch-prog-tag">p.${p.page + 1}</span>` : ''}
+          <div class="ch-top-right">
+            <span class="ch-pg" id="cp-${i}">— PGS</span>
+            ${isRead ? '<span class="ch-read-check">✓</span>' : ''}
+            <button class="ch-mark-btn" title="Toggle read">${isRead ? '✓' : '○'}</button>
+            <span class="ch-arr">▶</span>
+          </div>
+        </div>
+        ${group_ ? `<div class="ch-bot"><span class="ch-group-name">${group_}</span></div>` : ''}`;
+
+      const markBtn = item.querySelector('.ch-mark-btn');
+      markBtn.onclick = e => { e.stopPropagation(); toggleChRead(sKey, ch.name, null, markBtn); };
+      item.onclick = () => openLocalChapter(i);
+      group.appendChild(item);
+      countPages(ch).then(n => { const el = $(`cp-${i}`); if (el) el.textContent = `${n} PGS`; });
+    });
+
+    list.appendChild(group);
+  });
 }
 async function countPages(ch) {
   if (ch.pdfHandle) {
