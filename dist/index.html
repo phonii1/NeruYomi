@@ -1551,10 +1551,10 @@ async function openLocalChapter(idx, startAtEnd=false) {
     const saved = getChProg('local:'+curSeries.name, ch.name);
     // Resume only if genuinely in-progress (page > 0 in LTR, or page < last in RTL)
     const inProgress = saved && !saved.read && saved.page > 0 && saved.page < pages.length - 1;
-    curPage = inProgress ? saved.page : (rtl ? Math.max(0, pages.length - 1) : 0);
+    curPage = inProgress ? saved.page : 0;
   } else {
     // Arriving from the previous chapter — land at the reading-direction "end"
-    curPage = rtl ? 0 : Math.max(0, pages.length - 1);
+    curPage = pages.length - 1;
   }
   zoom=1;
   const preIdx=startAtEnd ? [curPage, curPage-1, curPage-2] : [curPage, curPage+1, curPage+2];
@@ -1665,11 +1665,7 @@ function stat() {
   for (let i = 0; i < pages.length; i++) {
     const seg = $('ps-' + i);
     if (!seg) continue;
-    if (rtl) {
-  seg.className = 'prog-seg' + (i > curPage ? ' done' : i === curPage ? ' current' : '');
-} else {
-  seg.className = 'prog-seg' + (i < curPage ? ' done' : i === curPage ? ' current' : '');
-}
+    seg.className = 'prog-seg' + (i < curPage ? ' done' : i === curPage ? ' current' : '');
   }
   $('ztxt').textContent=Math.round(zoom*100)+'%';
 }
@@ -1705,24 +1701,14 @@ function goPrevChapter() {
 }
 
 function goNext() {
-  const s=spread?2:1;
-  if (rtl) {
-    if (curPage > 0) jump(Math.max(0, curPage-s));
-    else goNextChapter();
-  } else {
-    if (curPage < pages.length-1) jump(Math.min(pages.length-1, curPage+s));
-    else goNextChapter();
-  }
+  const s = spread ? 2 : 1;
+  if (curPage < pages.length - 1) jump(Math.min(pages.length - 1, curPage + s));
+  else goNextChapter();
 }
 function goPrev() {
-  const s=spread?2:1;
-  if (rtl) {
-    if (curPage < pages.length-1) jump(Math.min(pages.length-1, curPage+s));
-    else goPrevChapter();
-  } else {
-    if (curPage > 0) jump(Math.max(0, curPage-s));
-    else goPrevChapter();
-  }
+  const s = spread ? 2 : 1;
+  if (curPage > 0) jump(Math.max(0, curPage - s));
+  else goPrevChapter();
 }
 // Navigation zones
 $('nav-left').onclick  = () => rtl ? goNext() : goPrev();
