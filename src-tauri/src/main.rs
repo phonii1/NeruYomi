@@ -1,7 +1,7 @@
 // Prevents a second console window from appearing on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -12,19 +12,12 @@ use tauri::{command, AppHandle, Emitter, Manager};
 // MANGAUPDATES SEARCH
 // ═══════════════════════════════════════════════════════════════
 
-#[derive(Serialize, Deserialize)]
-struct MuSearchRequest {
+#[command]
+async fn search_mu(
+    client: tauri::State<'_, reqwest::Client>,
     search: String,
     perpage: u32,
-}
-
-#[command]
-async fn search_mu(search: String, perpage: u32) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("NeruYomi/0.48.3B")
-        .build()
-        .map_err(|e| e.to_string())?;
-
+) -> Result<Value, String> {
     let body = serde_json::json!({ "search": search, "perpage": perpage });
 
     let response = client
@@ -52,12 +45,10 @@ async fn search_mu(search: String, perpage: u32) -> Result<Value, String> {
 // ═══════════════════════════════════════════════════════════════
 
 #[command]
-async fn fetch_mu_series(series_id: u64) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("NeruYomi/0.48.3B")
-        .build()
-        .map_err(|e| e.to_string())?;
-
+async fn fetch_mu_series(
+    client: tauri::State<'_, reqwest::Client>,
+    series_id: u64,
+) -> Result<Value, String> {
     let response = client
         .get(format!("https://api.mangaupdates.com/v1/series/{}", series_id))
         .send()
@@ -78,37 +69,56 @@ async fn fetch_mu_series(series_id: u64) -> Result<Value, String> {
 // LIBRARY PATH PERSISTENCE
 // ═══════════════════════════════════════════════════════════════
 
+/// Returns the path to the persisted library-path file.
+/// Pure path computation — no I/O. Callers are responsible for creating the
+/// directory if needed (always inside `spawn_blocking`).
 fn library_path_file(app: &AppHandle) -> Result<PathBuf, String> {
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?;
-    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     Ok(data_dir.join("library_path.txt"))
 }
 
 #[command]
 async fn save_library_path(app: AppHandle, path: String) -> Result<(), String> {
-    fs::write(library_path_file(&app)?, path).map_err(|e| e.to_string())
+    let file_path = library_path_file(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Ensure the data dir exists before writing (pure I/O — belongs here).
+        if let Some(dir) = file_path.parent() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        fs::write(file_path, path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[command]
 async fn load_library_path(app: AppHandle) -> Result<Option<String>, String> {
     let p = library_path_file(&app)?;
-    if p.exists() {
-        Ok(Some(fs::read_to_string(p).map_err(|e| e.to_string())?))
-    } else {
-        Ok(None)
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if p.exists() {
+            Ok(Some(fs::read_to_string(p).map_err(|e| e.to_string())?))
+        } else {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[command]
 async fn clear_library_path(app: AppHandle) -> Result<(), String> {
     let p = library_path_file(&app)?;
-    if p.exists() {
-        fs::remove_file(p).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || {
+        if p.exists() {
+            fs::remove_file(p).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -144,17 +154,21 @@ struct FsEntry {
 
 #[command]
 async fn read_dir(path: String) -> Result<Vec<FsEntry>, String> {
-    let entries = fs::read_dir(&path).map_err(|e| format!("read_dir({path}): {e}"))?;
-    let mut result = Vec::new();
-    for entry in entries.flatten() {
-        let meta = entry.metadata().map_err(|e| e.to_string())?;
-        result.push(FsEntry {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: entry.path().to_string_lossy().to_string(),
-            is_dir: meta.is_dir(),
-        });
-    }
-    Ok(result)
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = fs::read_dir(&path).map_err(|e| format!("read_dir({path}): {e}"))?;
+        let mut result = Vec::new();
+        for entry in entries.flatten() {
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            result.push(FsEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: entry.path().to_string_lossy().to_string(),
+                is_dir: meta.is_dir(),
+            });
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Recursively sums the sizes of all files under a directory.
@@ -176,14 +190,23 @@ fn dir_size(path: &std::path::Path) -> u64 {
 
 #[command]
 async fn get_series_size(path: String) -> Result<u64, String> {
-    Ok(dir_size(std::path::Path::new(&path)))
+    tauri::async_runtime::spawn_blocking(move || Ok(dir_size(std::path::Path::new(&path))))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[command]
 async fn read_file_as_data_url(path: String) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    let bytes = fs::read(&path).map_err(|e| format!("read_file({path}): {e}"))?;
+    // Reading a manga page (potentially several MB) on the async executor
+    // would stall other tasks — move it to the blocking thread pool.
+    let path_for_read = path.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        fs::read(&path_for_read).map_err(|e| format!("read_file({path_for_read}): {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     let mime = match path.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
         "jpg" | "jpeg" => "image/jpeg",
@@ -207,55 +230,68 @@ async fn read_file_as_data_url(path: String) -> Result<String, String> {
 
 #[command]
 async fn count_pdf_pages(path: String) -> Result<u32, String> {
-    let bytes = fs::read(&path).map_err(|e| format!("read({path}): {e}"))?;
-    let needle = b"/Count ";
-    let mut max_count: u32 = 0;
-    let mut i = 0;
-    while i + needle.len() < bytes.len() {
-        if bytes[i..i + needle.len()] == *needle {
-            let digits: Vec<u8> = bytes[i + needle.len()..]
-                .iter()
-                .take_while(|&&b| b.is_ascii_digit())
-                .copied()
-                .collect();
-            if let Ok(s) = std::str::from_utf8(&digits) {
-                if let Ok(n) = s.parse::<u32>() {
-                    if n > max_count {
-                        max_count = n;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = fs::read(&path).map_err(|e| format!("read({path}): {e}"))?;
+        let needle = b"/Count ";
+        let mut max_count: u32 = 0;
+        let mut i = 0;
+        while i + needle.len() < bytes.len() {
+            if bytes[i..i + needle.len()] == *needle {
+                // Borrow the digit slice directly — no heap allocation needed.
+                let start = i + needle.len();
+                let digit_len = bytes[start..]
+                    .iter()
+                    .take_while(|&&b| b.is_ascii_digit())
+                    .count();
+                if let Ok(s) = std::str::from_utf8(&bytes[start..start + digit_len]) {
+                    if let Ok(n) = s.parse::<u32>() {
+                        if n > max_count {
+                            max_count = n;
+                        }
                     }
                 }
             }
+            i += 1;
         }
-        i += 1;
-    }
-    if max_count > 0 {
-        Ok(max_count)
-    } else {
-        Err("PDF page count not found".into())
-    }
+        if max_count > 0 {
+            Ok(max_count)
+        } else {
+            Err("PDF page count not found".into())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ═══════════════════════════════════════════════════════════════
 // COVER IMAGE CACHE
 // ═══════════════════════════════════════════════════════════════
 
+/// Returns the path to the cover image cache directory.
+/// Pure path computation — no I/O. The directory is created on first write
+/// inside `cache_cover`'s `spawn_blocking` block.
 fn covers_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("covers");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
 
 #[command]
 async fn cache_cover(
     app: AppHandle,
+    client: tauri::State<'_, reqwest::Client>,
     url: String,
     series_id: String,
 ) -> Result<String, String> {
-    let ext = url.rsplit('.').next().unwrap_or("jpg").to_lowercase();
+    // Strip query string / fragment before extracting the extension so that
+    // "cover.jpg?v=2" doesn't produce "jpg?v=2" and fall through to the default.
+    let ext = url.split('?').next().unwrap_or("")
+        .split('#').next().unwrap_or("")
+        .rsplit('.').next().unwrap_or("jpg")
+        .to_lowercase();
     let safe_ext = match ext.as_str() {
         "png"  => "png",
         "webp" => "webp",
@@ -265,15 +301,15 @@ async fn cache_cover(
 
     let cache_path = covers_dir(&app)?.join(format!("{}.{}", series_id, safe_ext));
 
-    // Cache hit — return the path directly, no need to read the file at all.
-    if cache_path.exists() {
+    // Cache-hit check: run on the blocking thread pool so the async executor
+    // isn't stalled by a filesystem stat call.
+    let cache_path_clone = cache_path.clone();
+    let hit = tauri::async_runtime::spawn_blocking(move || cache_path_clone.exists())
+        .await
+        .map_err(|e| e.to_string())?;
+    if hit {
         return Ok(cache_path.to_string_lossy().into_owned());
     }
-
-    let client = reqwest::Client::builder()
-        .user_agent("NeruYomi/0.48.3B")
-        .build()
-        .map_err(|e| e.to_string())?;
 
     let bytes = client
         .get(&url)
@@ -284,21 +320,33 @@ async fn cache_cover(
         .await
         .map_err(|e| format!("cover read failed: {e}"))?;
 
-    fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
-
-    Ok(cache_path.to_string_lossy().into_owned())
+    // Write on the blocking pool — large covers can stall the executor otherwise.
+    tauri::async_runtime::spawn_blocking(move || {
+        // Ensure the covers directory exists on first write.
+        if let Some(dir) = cache_path.parent() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
+        Ok(cache_path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[command]
 async fn delete_cached_cover(app: AppHandle, series_id: String) -> Result<(), String> {
     let dir = covers_dir(&app)?;
-    for ext in &["jpg", "png", "webp", "gif"] {
-        let p = dir.join(format!("{}.{}", series_id, ext));
-        if p.exists() {
-            fs::remove_file(p).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        for ext in &["jpg", "png", "webp", "gif"] {
+            let p = dir.join(format!("{}.{}", series_id, ext));
+            if p.exists() {
+                fs::remove_file(p).map_err(|e| e.to_string())?;
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -325,12 +373,10 @@ fn parse_ver(s: &str) -> Option<(u32, u32, u32)> {
 }
 
 #[command]
-async fn check_for_updates(current_version: String) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("NeruYomi")
-        .build()
-        .map_err(|e| e.to_string())?;
-
+async fn check_for_updates(
+    client: tauri::State<'_, reqwest::Client>,
+    current_version: String,
+) -> Result<serde_json::Value, String> {
     let response = client
         .get("https://api.github.com/repos/phonii1/NeruYomi/releases")
         .send()
@@ -408,6 +454,11 @@ async fn open_url(url: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| e.to_string())?;
 
+    // Catch-all: surface a clear error rather than silently succeeding on
+    // platforms that none of the branches above match (e.g. FreeBSD).
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    return Err(format!("open_url is not supported on this platform"));
+
     Ok(())
 }
 
@@ -455,7 +506,7 @@ async fn start_library_watcher(app: AppHandle, path: String) -> Result<(), Strin
     app.state::<WatcherState>()
         .0
         .lock()
-        .unwrap()
+        .expect("watcher mutex poisoned")
         .replace(watcher);
 
     Ok(())
@@ -466,7 +517,7 @@ async fn stop_library_watcher(app: AppHandle) -> Result<(), String> {
     app.state::<WatcherState>()
         .0
         .lock()
-        .unwrap()
+        .expect("watcher mutex poisoned")
         .take(); // drops the watcher, stopping it
     Ok(())
 }
@@ -476,10 +527,21 @@ async fn stop_library_watcher(app: AppHandle) -> Result<(), String> {
 // ═══════════════════════════════════════════════════════════════
 
 fn main() {
+    // Build one shared HTTP client for the entire app lifetime.
+    // reqwest::Client internally manages a connection pool — rebuilding it on
+    // every command call throws away keep-alive connections and adds latency.
+    // The 15-second timeout prevents hung API calls from blocking tasks forever.
+    let http_client = reqwest::Client::builder()
+        .user_agent(concat!("NeruYomi/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("failed to build shared HTTP client");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(WatcherState(Mutex::new(None)))
+        .manage(http_client)
         .invoke_handler(tauri::generate_handler![
             // MangaUpdates
             search_mu,
