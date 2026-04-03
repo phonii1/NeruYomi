@@ -21,7 +21,7 @@ struct MuSearchRequest {
 #[command]
 async fn search_mu(search: String, perpage: u32) -> Result<Value, String> {
     let client = reqwest::Client::builder()
-        .user_agent("NeruYomi/0.48.2B")
+        .user_agent("NeruYomi/0.48.3B")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -43,6 +43,35 @@ async fn search_mu(search: String, perpage: u32) -> Result<Value, String> {
         .json::<Value>()
         .await
         .map_err(|e| format!("MU response parse failed: {e}"))
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MANGAUPDATES SERIES LOOKUP
+// Fetches the full series record by ID — the search endpoint
+// returns a slim result that omits authors and pub_status.
+// ═══════════════════════════════════════════════════════════════
+
+#[command]
+async fn fetch_mu_series(series_id: u64) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("NeruYomi/0.48.3B")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .get(format!("https://api.mangaupdates.com/v1/series/{}", series_id))
+        .send()
+        .await
+        .map_err(|e| format!("MU series request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("MU API returned {}", response.status()));
+    }
+
+    response
+        .json::<Value>()
+        .await
+        .map_err(|e| format!("MU series parse failed: {e}"))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -128,6 +157,28 @@ async fn read_dir(path: String) -> Result<Vec<FsEntry>, String> {
     Ok(result)
 }
 
+/// Recursively sums the sizes of all files under a directory.
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_dir() {
+                    total += dir_size(&entry.path());
+                } else {
+                    total += meta.len();
+                }
+            }
+        }
+    }
+    total
+}
+
+#[command]
+async fn get_series_size(path: String) -> Result<u64, String> {
+    Ok(dir_size(std::path::Path::new(&path)))
+}
+
 #[command]
 async fn read_file_as_data_url(path: String) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -204,8 +255,6 @@ async fn cache_cover(
     url: String,
     series_id: String,
 ) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
     let ext = url.rsplit('.').next().unwrap_or("jpg").to_lowercase();
     let safe_ext = match ext.as_str() {
         "png"  => "png",
@@ -216,14 +265,13 @@ async fn cache_cover(
 
     let cache_path = covers_dir(&app)?.join(format!("{}.{}", series_id, safe_ext));
 
+    // Cache hit — return the path directly, no need to read the file at all.
     if cache_path.exists() {
-        let bytes = fs::read(&cache_path).map_err(|e| e.to_string())?;
-        let mime = mime_for_ext(safe_ext);
-        return Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)));
+        return Ok(cache_path.to_string_lossy().into_owned());
     }
 
     let client = reqwest::Client::builder()
-        .user_agent("NeruYomi/0.48.2B")
+        .user_agent("NeruYomi/0.48.3B")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -238,8 +286,7 @@ async fn cache_cover(
 
     fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
 
-    let mime = mime_for_ext(safe_ext);
-    Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)))
+    Ok(cache_path.to_string_lossy().into_owned())
 }
 
 #[command]
@@ -254,19 +301,18 @@ async fn delete_cached_cover(app: AppHandle, series_id: String) -> Result<(), St
     Ok(())
 }
 
-fn mime_for_ext(ext: &str) -> &'static str {
-    match ext {
-        "png"  => "image/png",
-        "webp" => "image/webp",
-        "gif"  => "image/gif",
-        _      => "image/jpeg",
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════
 // UPDATE CHECKER
 // Fetches all releases from GitHub and finds the latest -b tag.
 // ═══════════════════════════════════════════════════════════════
+
+/// Returns the running app version directly from the Cargo manifest.
+/// CARGO_PKG_VERSION is set at compile time, so it always matches
+/// Cargo.toml without needing the tauri-plugin-app.
+#[command]
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
 
 /// Parses a "X.Y.Z" version string into a comparable (major, minor, patch) tuple.
 /// Returns None if the string isn't a valid three-part version.
@@ -300,14 +346,14 @@ async fn check_for_updates(current_version: String) -> Result<serde_json::Value,
         .await
         .map_err(|e| e.to_string())?;
 
-    // Find the latest non-draft, non-prerelease tag ending in "-b"
+    // Find the latest non-draft tag ending in "-b" (pre-releases included —
+    // full 1.0 release is the first non-pre-release build)
     let latest = releases
         .as_array()
         .and_then(|arr| {
             arr.iter().find(|r| {
                 r["tag_name"].as_str().unwrap_or("").ends_with("-b")
                     && !r["draft"].as_bool().unwrap_or(false)
-                    && !r["prerelease"].as_bool().unwrap_or(false)
             })
         });
 
@@ -437,6 +483,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             // MangaUpdates
             search_mu,
+            fetch_mu_series,
             // Library persistence
             save_library_path,
             load_library_path,
@@ -446,10 +493,12 @@ fn main() {
             read_dir,
             read_file_as_data_url,
             count_pdf_pages,
+            get_series_size,
             // Cover image cache
             cache_cover,
             delete_cached_cover,
             // Updates
+            get_app_version,
             check_for_updates,
             open_url,
             // Library watcher

@@ -13,7 +13,7 @@
   }
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Hachi+Maru+Pop&display=swap" rel="stylesheet">
-<title>NeruYomi V0.48.2B</title>
+<title>NeruYomi V0.48.3B</title>
 <script src="pdf.min.js"></script>
 <!--
   NeruYomi V0.48.2B — Local manga reader
@@ -48,8 +48,8 @@
   --border:   1px solid #f5f5f5;
   --hdr:      52px;
   --bar:      44px;
-  --r:        3px;   /* standard border-radius */
-  --r-sm:     2px;   /* small elements: badges, pills */
+  --r:        5px;   /* standard border-radius */
+  --r-sm:     3px;   /* small elements: badges, pills */
   --f-brand:  "Family And Friends", "Family & Friends", Arial, sans-serif;
   --f-kana:   "KF Himaji", "Hachi Maru Pop", cursive;
   --f-hdr:    "League Spartan", Arial, sans-serif;
@@ -107,7 +107,9 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 .land-note { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #f5f5f5; letter-spacing: 1px; text-align: center; }
 
 /* ── LOCAL LIBRARY ── */
-#view-library { flex-direction: column; }
+#view-library { flex-direction: column; scrollbar-width: thin; scrollbar-color: var(--red) #27252d; }
+#view-library::-webkit-scrollbar { width: 4px; }
+#view-library::-webkit-scrollbar-thumb { background: var(--red); }
 .lib-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: var(--border); flex-shrink: 0; position: relative; }
 .lib-count { font-family: var(--f-hdr); font-weight: 700; font-size: 14px; color: #f5f5f5; letter-spacing: 1px; white-space: nowrap; }
 .lib-count b { color: var(--red); }
@@ -127,8 +129,10 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 
 /* shared card grid */
 .series-grid { overflow: visible; padding: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(176px,1fr)); gap: 12px; align-content: start; width: 100%; }
+.series-grid.density-compact     { grid-template-columns: repeat(auto-fill, minmax(110px,1fr)); gap: 8px; padding: 10px; }
+.series-grid.density-normal      { grid-template-columns: repeat(auto-fill, minmax(176px,1fr)); gap: 12px; }
+.series-grid.density-comfortable { grid-template-columns: repeat(auto-fill, minmax(230px,1fr)); gap: 16px; padding: 18px; }
 .series-grid::-webkit-scrollbar { display: none; }
-.series-grid::-webkit-scrollbar-thumb { display: none; }
 .series-card { cursor: pointer; display: flex; flex-direction: column; transition: transform 0.14s; touch-action: manipulation; border-radius: var(--r); overflow: hidden; position: relative; }
 .series-card:hover { transform: translateY(-3px); }
 .series-card:hover .s-cover { border-color: var(--red); }
@@ -142,11 +146,17 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 
 
 /* ── CHAPTER VIEW ── */
-#view-chapters { flex-direction: column; }
+#view-chapters { display: none; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--red) #27252d; }
+#view-chapters.active { display: block; }
+#view-chapters::-webkit-scrollbar { width: 4px; }
+#view-chapters::-webkit-scrollbar-thumb { background: var(--red); }
 
-/* Series header */
-.ch-header { display: flex; gap: 16px; padding: 18px 20px; border-bottom: var(--border); flex-shrink: 0; background: #1a1826; }
-.hero-img { width: 120px; height: 170px; background: #100f18; border: 2px solid #2a2839; overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #f5f5f5; border-radius: var(--r); }
+/* Series hero header */
+.ch-hero { position: relative; overflow: hidden; }
+.ch-hero-bg { position: absolute; inset: -24px; background-size: cover; background-position: center; background-color: #0d0c14; filter: blur(24px) brightness(0.28); z-index: 0; }
+.ch-hero-tint { position: absolute; inset: 0; background: linear-gradient(to right, rgba(20,18,30,0.96) 0%, rgba(20,18,30,0.65) 55%, rgba(20,18,30,0.35) 100%); z-index: 1; }
+.ch-hero-content { position: relative; z-index: 2; display: flex; gap: 20px; padding: 24px 24px 20px; align-items: flex-start; }
+.hero-img { width: 156px; height: 221px; background: #100f18; border: 1.5px solid rgba(184,158,232,0.25); overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #f5f5f5; border-radius: 6px; }
 .hero-img img { width: 100%; height: 100%; object-fit: cover; }
 .series-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .series-title-big { font-family: var(--f-hdr); font-weight: 700; font-size: 20px; letter-spacing: 0.5px; color: var(--white); line-height: 1.3; }
@@ -171,9 +181,7 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 .mu-fetching { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; letter-spacing: 0.5px; color: #3a3748; }
 
 /* Chapter list */
-.ch-list { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--red) #27252d; }
-.ch-list::-webkit-scrollbar { width: 4px; }
-.ch-list::-webkit-scrollbar-thumb { background: var(--red); }
+.ch-list { display: block; }
 
 /* Volume group header */
 .vol-group { border-bottom: 2px solid #1e1c2a; }
@@ -187,24 +195,23 @@ header { display: flex; align-items: center; gap: 10px; padding: 0 14px; height:
 .vol-group.collapsed .ch-item { display: none; }
 
 /* Chapter row */
-.ch-item { display: flex; flex-direction: column; padding: 9px 20px; border-bottom: var(--border); cursor: pointer; transition: background 0.1s; touch-action: manipulation; }
-.ch-item:hover, .ch-item:active { background: #0c0b14; }
-.ch-item.ch-read { opacity: 0.5; }
-.ch-item.ch-in-progress .ch-top-title { color: var(--red); }
-.ch-top { display: flex; align-items: center; gap: 8px; width: 100%; }
-.ch-num  { font-family: var(--f-hdr); font-weight: 700; font-size: 11px; color: var(--red); letter-spacing: 0.5px; flex-shrink: 0; min-width: 52px; }
-.ch-top-title { flex: 1; font-family: var(--f-body); font-size: 13px; color: var(--paper); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ch-item { display: flex; align-items: center; height: 56px; padding: 0 24px; border-bottom: 0.5px solid rgba(255,255,255,0.04); cursor: pointer; transition: background 0.1s; touch-action: manipulation; gap: 14px; }
+.ch-item:hover, .ch-item:active { background: rgba(255,255,255,0.03); }
+.ch-item.ch-read { opacity: 0.4; }
+.ch-item.ch-in-progress .ch-title-text { color: var(--red); }
+.ch-num  { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: var(--red); letter-spacing: 0.5px; flex-shrink: 0; min-width: 52px; }
+.ch-text { flex: 1; min-width: 0; }
+.ch-title-text { font-size: 13px; color: var(--paper); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1; margin-bottom: 3px; }
+.ch-sub { font-size: 11px; color: rgba(255,255,255,0.25); letter-spacing: 0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ch-top-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.ch-pg { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.5px; }
-.ch-read-check { font-size: 11px; color: #27ae60; }
+.ch-read-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; opacity: 0.6; display: none; flex-shrink: 0; }
+.ch-item.ch-read .ch-read-dot { display: block; }
 .ch-prog-tag { font-family: var(--f-hdr); font-weight: 700; font-size: 9px; color: var(--red); letter-spacing: 0.5px; padding: 1px 5px; border: 1px solid var(--red); border-radius: var(--r-sm); }
-.ch-mark-btn { background: transparent; border: none; color: #3a3748; font-size: 12px; cursor: pointer; padding: 0 2px; flex-shrink: 0; transition: color 0.12s; }
-.ch-mark-btn:hover { color: #27ae60; }
-.ch-item.ch-read .ch-mark-btn { color: #27ae60; }
-.ch-arr { color: #3a3748; font-size: 11px; flex-shrink: 0; transition: color 0.12s; }
-.ch-item:hover .ch-arr, .ch-item:active .ch-arr { color: var(--red); }
-.ch-bot { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding-left: 60px; }
-.ch-group-name { font-family: var(--f-hdr); font-weight: 700; font-size: 10px; color: #6b6478; letter-spacing: 0.3px; }
+.ch-mark-btn { background: transparent; border: none; color: rgba(255,255,255,0.2); font-size: 12px; cursor: pointer; padding: 0 2px; flex-shrink: 0; transition: color 0.12s; }
+.ch-mark-btn:hover { color: #4ade80; }
+.ch-item.ch-read .ch-mark-btn { color: #4ade80; }
+.ch-arr { color: rgba(255,255,255,0.15); font-size: 10px; flex-shrink: 0; transition: color 0.12s; }
+.ch-item:hover .ch-arr, .ch-item:active .ch-arr { color: rgba(184,158,232,0.6); }
 
 /* ── READER ── */
 #view-reader { flex-direction: column; }
@@ -380,25 +387,23 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
   .zoom-g { display: none; }
   .page-jump-input { width: 40px; font-size: 10px; }
 
-  /* chapter list: larger tap targets */
-  .ch-item { padding: 8px 12px; }
-  
+  /* chapter list: compressed rows on small screens */
+  .ch-item { height: 48px; padding: 0 12px; gap: 10px; }
+  .hero-img { width: 100px; height: 141px; }
+
   }
 
-
-.hero-img       { width: 113px; height: 158px; }
 
 
 /* ── READING PROGRESS ── */
 .card-progress-bar  { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: rgba(0,0,0,0.45); z-index: 3; pointer-events: none; }
 .card-progress-fill { height: 100%; background: var(--red); border-radius: 0 1px 0 0; }
-.ch-read            { opacity: 0.55; }
+.ch-read            { opacity: 0.4; }
 .ch-in-progress .ch-name { color: var(--red); }
-.ch-read-check   { font-size: 11px; color: #27ae60; flex-shrink: 0; }
 .ch-prog-tag     { font-family: var(--f-hdr); font-weight: 700; font-size: 9px; color: var(--red); letter-spacing: 0.5px; padding: 2px 5px; border: 1px solid var(--red); border-radius: var(--r-sm); flex-shrink: 0; }
-.ch-mark-btn     { background: transparent; border: none; color: #3a3748; font-size: 13px; cursor: pointer; padding: 0 4px; flex-shrink: 0; transition: color 0.12s; margin-left: auto; }
-.ch-mark-btn:hover { color: #27ae60; }
-.ch-item.ch-read .ch-mark-btn { color: #27ae60; }
+.ch-mark-btn     { background: transparent; border: none; color: rgba(255,255,255,0.2); font-size: 12px; cursor: pointer; padding: 0 2px; flex-shrink: 0; transition: color 0.12s; }
+.ch-mark-btn:hover { color: #4ade80; }
+.ch-item.ch-read .ch-mark-btn { color: #4ade80; }
 .series-prog-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
 .series-prog-bar { flex: 1; height: 3px; background: #27252e; border-radius: 2px; overflow: hidden; max-width: 120px; }
 .series-prog-fill { height: 100%; background: var(--red); border-radius: 2px; }
@@ -430,7 +435,6 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
 .mu-link          { font-size: 13px; }
 .mu-fetching      { font-size: 13px; }
 .ch-num           { font-size: 11px; }
-.ch-pg            { font-size: 11px; }
 .ch-arr           { font-size: 13px; }
 /* Reader */
 .thumb-n          { font-size: 10px; }
@@ -523,20 +527,24 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
 
 <!-- LOCAL CHAPTERS -->
 <div class="view" id="view-chapters">
-  <div class="ch-header">
-    <div class="hero-img" id="hero">📖</div>
-    <div class="series-meta">
-      <div class="series-title-big" id="stitle">—</div>
-      <div class="series-stat" id="sstat">—</div>
-      <div id="mu-meta" style="display:none">
-        <div class="mu-meta-row" id="mu-author"></div>
-        <div class="mu-meta-row" id="mu-status"></div>
-        <div class="mu-desc" id="mu-desc"></div>
-        <div class="mu-genres" id="mu-genres"></div>
-        <a class="mu-link" id="mu-link" target="_blank" rel="noopener noreferrer">MANGAUPDATES ↗</a>
+  <div class="ch-hero">
+    <div class="ch-hero-bg" id="ch-hero-bg"></div>
+    <div class="ch-hero-tint"></div>
+    <div class="ch-hero-content">
+      <div class="hero-img" id="hero">📖</div>
+      <div class="series-meta">
+        <div class="series-title-big" id="stitle">—</div>
+        <div class="series-stat" id="sstat">—</div>
+        <div id="mu-meta" style="display:none">
+          <div class="mu-meta-row" id="mu-author"></div>
+          <div class="mu-meta-row" id="mu-status"></div>
+          <div class="mu-desc" id="mu-desc"></div>
+          <div class="mu-genres" id="mu-genres"></div>
+          <a class="mu-link" id="mu-link" target="_blank" rel="noopener noreferrer">MANGAUPDATES ↗</a>
+        </div>
+        <div class="mu-fetching" id="mu-fetching" style="display:none">LOOKING UP ON MANGAUPDATES…</div>
+        <div id="local-continue-wrap"></div>
       </div>
-      <div class="mu-fetching" id="mu-fetching" style="display:none">LOOKING UP ON MANGAUPDATES…</div>
-      <div id="local-continue-wrap"></div>
     </div>
   </div>
 <div class="ch-list" id="ch-list"></div>
@@ -615,9 +623,25 @@ body.theme-test-pink #header-search input::placeholder { color: #FF99D8; }
 
   
   <div class="settings-group">
+    <div class="settings-label">Library Grid</div>
+    <label class="settings-option">
+      <input type="radio" name="density" value="compact" onchange="setSetting('density', 'compact')">
+      <span>Compact</span>
+    </label>
+    <label class="settings-option">
+      <input type="radio" name="density" value="normal" checked onchange="setSetting('density', 'normal')">
+      <span>Normal</span>
+    </label>
+    <label class="settings-option">
+      <input type="radio" name="density" value="comfortable" onchange="setSetting('density', 'comfortable')">
+      <span>Comfortable</span>
+    </label>
+  </div>
+
+  <div class="settings-group">
     <div class="settings-label">Updates</div>
     <div class="settings-option" style="flex-direction:column;align-items:flex-start;gap:6px;padding:10px 8px">
-      <div id="update-status" style="font-family:var(--f-hdr);font-weight:700;font-size:10px;color:#9690a2;letter-spacing:0.5px">—</div>
+      <div id="update-status" style="font-family:var(--f-hdr);font-weight:700;font-size:10px;color:#9690a2;letter-spacing:0.5px">v0.48.2</div>
       <button class="btn" style="font-size:10px;padding:5px 10px" onclick="manualCheckUpdate()">CHECK FOR UPDATES</button>
     </div>
   </div>
@@ -664,12 +688,24 @@ async function muSearch(search, perpage = 5) {
   if (IS_TAURI) {
     return invoke('search_mu', { search, perpage });
   }
+  // Browser dev mode only — requires a local proxy server on port 3005
   const res = await fetch(`http://127.0.0.1:3005/mu/series/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ search, perpage }),
   });
-  if (!res.ok) throw new Error(`proxy ${res.status}`);
+  if (!res.ok) throw new Error(`MU search failed: ${res.status}`);
+  return res.json();
+}
+
+/** Fetches the full series record by ID — the search endpoint omits authors and pub_status. */
+async function muFetchSeries(seriesId) {
+  if (IS_TAURI) {
+    return invoke('fetch_mu_series', { seriesId });
+  }
+  // Browser dev mode only — requires a local proxy server on port 3005
+  const res = await fetch(`http://127.0.0.1:3005/mu/series/${seriesId}`);
+  if (!res.ok) throw new Error(`MU series fetch failed: ${res.status}`);
   return res.json();
 }
 
@@ -701,23 +737,25 @@ let userSettings = {
   direction:   localStorage.getItem('pref_direction')   || 'rtl',
   layout:      localStorage.getItem('pref_layout')      || 'single',
   theme:       localStorage.getItem('pref_theme')       || 'default',
+  density:     localStorage.getItem('pref_density')     || 'normal',
 };
 
-// Initialize settings on load
+function applyDensity(d) {
+  const grid = $('series-grid');
+  if (!grid) return;
+  grid.classList.remove('density-compact', 'density-normal', 'density-comfortable');
+  grid.classList.add('density-' + d);
+}
+
 function initSettings() {
   rtl    = userSettings.direction === 'rtl';
   spread = userSettings.layout    === 'spread';
-  
-  // Reading direction radio
   document.querySelector('input[name="direction"][value="' + userSettings.direction + '"]').checked = true;
-  // Layout radio
   document.querySelector('input[name="layout"][value="' + (userSettings.layout === 'spread' ? 'spread' : 'single') + '"]').checked = true;
-  // Theme select
+  document.querySelector('input[name="density"][value="' + userSettings.density + '"]').checked = true;
   if ($('theme-select')) $('theme-select').value = userSettings.theme;
-  // Apply saved theme
-  if (userSettings.theme !== 'default') {
-    document.body.classList.add('theme-' + userSettings.theme);
-  }
+  if (userSettings.theme !== 'default') document.body.classList.add('theme-' + userSettings.theme);
+  applyDensity(userSettings.density);
 }
 
 function setSetting(key, value) {
@@ -739,11 +777,10 @@ function setSetting(key, value) {
       stat();
     }
   } else if (key === 'theme') {
-    // Remove all theme classes and apply the selected theme
     document.body.classList.remove('theme-default', 'theme-test-pink');
-    if (value !== 'default') {
-      document.body.classList.add('theme-' + value);
-    }
+    if (value !== 'default') document.body.classList.add('theme-' + value);
+  } else if (key === 'density') {
+    applyDensity(value);
   }
 }
 
@@ -882,6 +919,8 @@ function saveMuCache() {
 
 /**
  * Searches MangaUpdates for a series by name and returns structured metadata.
+ * Does a two-step fetch: search to find the best match, then a full series
+ * lookup by ID to get authors and pub_status (not returned by the search endpoint).
  * Results are cached in localStorage so each name is only fetched once.
  * Pass force=true to bypass the cache and re-fetch from the API.
  *
@@ -899,21 +938,31 @@ async function fetchMuInfo(name, force = false) {
     const nl = name.toLowerCase();
     const best = results.find(r => (r.hit_title || r.record?.title || '').toLowerCase() === nl)
               || results[0];
-    const rec = best.record || {};
+    const slim = best.record || {};
+
+    // Follow up with a full series fetch — the search result omits authors and pub_status.
+    let full = slim;
+    if (slim.series_id) {
+      try { full = await muFetchSeries(slim.series_id); }
+      catch(e) { console.warn('[MU] full series fetch failed for', name, '— falling back to slim record:', e); }
+    }
+
     const stripHtml = s => (s || '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
     const info = {
-      id:          rec.series_id,
-      title:       rec.title || name,
-      url:         rec.url   || `https://www.mangaupdates.com/series/${rec.series_id}`,
-      description: stripHtml(rec.description),
-      image:       rec.image?.url?.original || rec.image?.url?.thumb || null,
-      thumb:       rec.image?.url?.thumb    || rec.image?.url?.original || null,
-      year:        rec.year       || null,
-      status:      rec.pub_status?.[0]?.status || rec.status || null,
-      genres:      (rec.genres  || []).map(g => g.genre).filter(Boolean).slice(0, 7),
-      authors:     (rec.authors || []).filter(a => a.type === 'Author').map(a => a.name).join(', ')
-                || (rec.authors || []).map(a => a.name).join(', ') || null,
-      rating:      rec.bayesian_rating ? rec.bayesian_rating.toFixed(2) : null,
+      id:          full.series_id  || slim.series_id,
+      title:       full.title      || slim.title || name,
+      url:         full.url        || slim.url   || `https://www.mangaupdates.com/series/${slim.series_id}`,
+      description: stripHtml(full.description || slim.description),
+      image:       full.image?.url?.original || full.image?.url?.thumb || slim.image?.url?.original || slim.image?.url?.thumb || null,
+      thumb:       full.image?.url?.thumb    || full.image?.url?.original || slim.image?.url?.thumb || slim.image?.url?.original || null,
+      year:        full.year       || slim.year   || null,
+      status:      full.pub_status?.[0]?.status || slim.pub_status?.[0]?.status || null,
+      genres:      ((full.genres  || slim.genres  || []).map(g => g.genre).filter(Boolean).slice(0, 7)),
+      authors:     ((full.authors || slim.authors || []).filter(a => a.type === 'Author').map(a => a.name).join(', '))
+                || ((full.authors || slim.authors || []).map(a => a.name).join(', ')) || null,
+      rating:      (full.bayesian_rating ?? slim.bayesian_rating) != null
+                     ? Number(full.bayesian_rating ?? slim.bayesian_rating).toFixed(2)
+                     : null,
       cachedAt:    Date.now(),
     };
     muCache[name] = info;
@@ -946,35 +995,57 @@ function enqueueMuCover(series, fallback = null) {
 async function _drainMuCoverQ() {
   _muCoverRunning = true;
   while (_muCoverQ.length) {
-    const { series: s, fallback } = _muCoverQ.shift();
-    const info = await fetchMuInfo(s.name);
-    if (info?.thumb || info?.image) {
-      // MU has a cover — cache it natively in Tauri, use URL directly in browser
-      const rawUrl = info.image || info.thumb;
-      if (IS_TAURI && info.id) {
-        try {
-          setCoverUrl(s, await invoke('cache_cover', {
-            url: rawUrl,
-            seriesId: String(info.id),
-          }));
-        } catch(e) {
-          // Cache failed — fall back to direct URL
-          console.warn('[cover cache] failed for', s.name, e);
-          setCoverUrl(s, rawUrl);
-        }
-      } else {
-        setCoverUrl(s, rawUrl);
-      }
-      s.muInfo = info;
-      const card = document.querySelector(`[data-series="${CSS.escape(s.name)}"] .s-cover`);
-      if (card) { card.innerHTML = localCoverHTML(s); attachCardExtras(card, 'local:'+s.name, s, 'local'); }
-    } else if (fallback) {
-      // MU found nothing — fall back to local chapter page
-      await fallback();
+    // Split the current queue into items whose metadata is already in the local
+    // cache and items that will need a live MangaUpdates API call.
+    // Cache hits are free — process them all in parallel with no throttle.
+    // API misses must stay sequential and throttled to respect rate limits.
+    const cached = [], uncached = [];
+    for (const item of _muCoverQ.splice(0)) {
+      (Object.prototype.hasOwnProperty.call(muCache, item.series.name) ? cached : uncached).push(item);
     }
-    if (_muCoverQ.length) await new Promise(r => setTimeout(r, 350)); // throttle: ~2.9 req/s max
+
+    // Batch: all cache hits in parallel — covers appear simultaneously
+    if (cached.length) {
+      await Promise.all(cached.map(({ series: s, fallback }) => _applyCover(s, fallback)));
+    }
+
+    // Sequential: one API call at a time, throttled
+    for (let i = 0; i < uncached.length; i++) {
+      const { series: s, fallback } = uncached[i];
+      await _applyCover(s, fallback);
+      if (i < uncached.length - 1 || _muCoverQ.length) {
+        await new Promise(r => setTimeout(r, 350));
+      }
+    }
   }
   _muCoverRunning = false;
+}
+
+/** Resolves and applies the cover URL for a single series. */
+async function _applyCover(s, fallback) {
+  const info = await fetchMuInfo(s.name);
+  if (info?.thumb || info?.image) {
+    const rawUrl = info.image || info.thumb;
+    if (IS_TAURI && info.id) {
+      try {
+        const cachedPath = await invoke('cache_cover', {
+          url: rawUrl,
+          seriesId: String(info.id),
+        });
+        setCoverUrl(s, convertFileSrc(cachedPath));
+      } catch(e) {
+        console.warn('[cover cache] failed for', s.name, e);
+        setCoverUrl(s, rawUrl);
+      }
+    } else {
+      setCoverUrl(s, rawUrl);
+    }
+    s.muInfo = info;
+    const card = document.querySelector(`[data-series="${CSS.escape(s.name)}"] .s-cover`);
+    if (card) { card.innerHTML = localCoverHTML(s); attachCardExtras(card, 'local:'+s.name, s, 'local'); }
+  } else if (fallback) {
+    await fallback();
+  }
 }
 
 // ── PDF.js setup ──
@@ -1020,6 +1091,22 @@ async function preloadPdfPage(entry) {
 const $      = id => document.getElementById(id);
 /** Escapes a value for safe interpolation into an HTML template literal. */
 const esc    = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+/**
+ * Converts a local file path to a Tauri asset protocol URL so the WebView
+ * can load it directly from disk — no IPC, no base64, no JS decode.
+ * Tries the stable public API first (available when withGlobalTauri: true),
+ * falls back to manual construction that normalizes Windows backslashes.
+ */
+function convertFileSrc(path) {
+  if (window.__TAURI__?.core?.convertFileSrc) return window.__TAURI__.core.convertFileSrc(path);
+  // Normalize backslashes → forward slashes, then encode each segment.
+  // Encoding the full path with encodeURIComponent encodes backslashes as
+  // %5C which WebView2 on Windows doesn't reliably decode for asset routing.
+  const encoded = path.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/');
+  return navigator.userAgent.includes('Windows')
+    ? `https://asset.localhost/${encoded}`
+    : `asset://localhost/${encoded}`;
+}
 
 const HAS_FSAPI = ('showDirectoryPicker' in window);
 
@@ -1032,7 +1119,7 @@ function show(id) {
   $('view-'+id).classList.add('active');
   document.querySelector('header').classList.toggle('lib-active', id === 'library');
   // Restore chapter list scroll when returning from reader
-  if (id === 'chapters') requestAnimationFrame(() => { const el = $('ch-list'); if (el) el.scrollTop = _savedChScroll; });
+  if (id === 'chapters') requestAnimationFrame(() => { const el = $('view-chapters'); if (el) el.scrollTop = _savedChScroll; });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1084,10 +1171,11 @@ async function _loadLibraryFromPath(folderPath) {
     .sort((a, b) => natCmp(a.name, b.name));
   for (const dir of dirs) {
     const chapters = await getChaptersTauri(dir.path);
-    library.push({ name: dir.name, path: dir.path, chapters, coverUrl: null });
+    library.push({ name: dir.name, path: dir.path, chapters, coverUrl: null, size: null });
   }
   renderLibrary(); show('library'); bc('library');
   library.forEach(loadCoverTauri);
+  library.forEach(loadSeriesSize);
   // Start watching for new series folders
   if (IS_TAURI) invoke('start_library_watcher', { path: folderPath }).catch(() => {});
 }
@@ -1114,12 +1202,21 @@ async function loadCoverTauri(series) {
         .filter(e => !e.is_dir && isImg(e.name))
         .sort((a, b) => natCmp(a.name, b.name));
       if (!imgs.length) return;
-      series.coverUrl = await invoke('read_file_as_data_url', { path: imgs[0].path });
+      setCoverUrl(series, convertFileSrc(imgs[0].path));
       const card = document.querySelector(`[data-series="${CSS.escape(series.name)}"] .s-cover`);
       if (card) { card.innerHTML = localCoverHTML(series); attachCardExtras(card, 'local:'+series.name, series, 'local'); }
     } catch(e) { console.warn('Tauri cover error', e); }
   };
   enqueueMuCover(series, localFallback);
+}
+
+async function loadSeriesSize(series) {
+  if (!IS_TAURI || !series.path) return;
+  try {
+    series.size = await invoke('get_series_size', { path: series.path });
+    const badge = document.querySelector(`[data-series="${CSS.escape(series.name)}"] .s-badge`);
+    if (badge) badge.textContent = badgeText(series);
+  } catch(e) { /* non-critical — badge stays as chapter count only */ }
 }
 async function getChaptersFSAPI(h) {
   const dirs = [], pdfs = [];
@@ -1256,7 +1353,7 @@ async function loadCoverFallback(series) {
 }
 
 function localCoverHTML(s) {
-  return `<img src="${s.coverUrl}" loading="lazy" alt="${esc(s.name)}"><div class="s-badge">${s.chapters.length} CH</div>`;
+  return `<img src="${s.coverUrl}" loading="lazy" alt="${esc(s.name)}"><div class="s-badge">${badgeText(s)}</div>`;
 }
 
 /**
@@ -1397,7 +1494,7 @@ function renderLibrary(q='') {
     const key = 'local:'+s.name;
     const card=document.createElement('div'); card.className='series-card'; card.dataset.series=s.name; card.dataset.cardKey=key; card.dataset.totalChs=s.chapters.length; card.onclick=()=>openSeries(s);
     const cover=document.createElement('div'); cover.className='s-cover';
-    cover.innerHTML=s.coverUrl?localCoverHTML(s):`<div class="s-cover-ph">📖<small>LOADING</small></div><div class="s-badge">${s.chapters.length} CH</div>`;
+    cover.innerHTML=s.coverUrl?localCoverHTML(s):`<div class="s-cover-ph">📖<small>LOADING</small></div><div class="s-badge">${badgeText(s)}</div>`;
     attachCardExtras(cover, key, s, 'local');
     attachCardProgressBar(cover, key, s.chapters.length);
     const name=document.createElement('div'); name.className='s-name'; name.textContent=s.name;
@@ -1431,12 +1528,20 @@ function renderLocalSearchPreview(q) {
   prev.classList.add('show');
 }
 
+/** Updates the blurred cover image used as the hero background. */
+function _updateHeroBg(coverUrl) {
+  const bg = $('ch-hero-bg');
+  if (!bg) return;
+  bg.style.backgroundImage = coverUrl ? `url("${coverUrl.replace(/"/g, '\\"')}")` : '';
+}
+
 // Local series → chapter list
 async function openSeries(series) {
   curSeries = series; show('chapters'); bc('chapters');
   $('stitle').textContent = series.name;
   $('sstat').innerHTML = `<b>${series.chapters.length}</b> CHAPTERS`;
   $('hero').innerHTML = series.coverUrl ? `<img src="${series.coverUrl}" alt="">` : '📖';
+  _updateHeroBg(series.coverUrl);
 
   // Reset MU meta
   $('mu-meta').style.display    = 'none';
@@ -1478,6 +1583,7 @@ async function openSeries(series) {
       const muCover = info.image || info.thumb;
       setCoverUrl(series, muCover);
       $('hero').innerHTML = `<img src="${muCover}" alt="">`;
+      _updateHeroBg(muCover);
       const card = document.querySelector(`[data-series="${CSS.escape(series.name)}"] .s-cover`);
       if (card) { card.innerHTML = localCoverHTML(series); attachCardExtras(card, 'local:' + series.name, series, 'local'); }
     }
@@ -1586,24 +1692,23 @@ function renderChapterList(series, sKey) {
       const item = document.createElement('div');
       item.className = 'ch-item' + (isRead ? ' ch-read' : '') + (inProg ? ' ch-in-progress' : '');
       item.innerHTML = `
-        <div class="ch-top">
-          <span class="ch-num">${esc(label)}</span>
-          <span class="ch-top-title">${esc(title)}</span>
-          ${inProg ? `<span class="ch-prog-tag">p.${p.page + 1}</span>` : ''}
-          <div class="ch-top-right">
-            <span class="ch-pg" id="cp-${i}">— PGS</span>
-            ${isRead ? '<span class="ch-read-check">✓</span>' : ''}
-            <button class="ch-mark-btn" title="Toggle read">${isRead ? '✓' : '○'}</button>
-            <span class="ch-arr">▶</span>
-          </div>
+        <span class="ch-num">${esc(label)}</span>
+        <div class="ch-text">
+          <div class="ch-title-text">${esc(title)}</div>
+          <div class="ch-sub">${group_ ? esc(group_) + ' · ' : ''}<span id="cp-${i}">—</span> pgs</div>
         </div>
-        ${group_ ? `<div class="ch-bot"><span class="ch-group-name">${esc(group_)}</span></div>` : ''}`;
+        <div class="ch-top-right">
+          ${inProg ? `<span class="ch-prog-tag">p.${p.page + 1}</span>` : ''}
+          <span class="ch-read-dot"></span>
+          <button class="ch-mark-btn" title="Toggle read">${isRead ? '✓' : '○'}</button>
+          <span class="ch-arr">▶</span>
+        </div>`;
 
       const markBtn = item.querySelector('.ch-mark-btn');
       markBtn.onclick = e => { e.stopPropagation(); toggleChRead(sKey, ch.name, null, markBtn); };
       item.onclick = () => openLocalChapter(i);
       group.appendChild(item);
-      countPages(ch).then(n => { const el = $(`cp-${i}`); if (el) el.textContent = `${n} PGS`; });
+      countPages(ch).then(n => { const el = $(`cp-${i}`); if (el) el.textContent = n; });
     });
 
     list.appendChild(group);
@@ -1640,7 +1745,7 @@ async function countPages(ch) {
 // Local chapter reader
 let _savedChScroll = 0;
 async function openLocalChapter(idx, startAtEnd=false) {
-  _savedChScroll = $('ch-list')?.scrollTop || 0;
+  _savedChScroll = $('view-chapters')?.scrollTop || 0;
   curChIdx=idx; readerSrc='local';
   const ch=curSeries.chapters[idx];
   show('reader'); bc('reader');
@@ -1654,26 +1759,29 @@ async function openLocalChapter(idx, startAtEnd=false) {
     try {
       let file;
       if (IS_TAURI && ch.pdfPath) {
-        const dataUrl = await invoke('read_file_as_data_url', { path: ch.pdfPath });
-        const res = await fetch(dataUrl);
-        const blob = await res.blob();
-        file = new File([blob], ch.name + '.pdf', { type: 'application/pdf' });
+        // Load PDF via asset protocol — no base64 roundtrip needed
+        const pdfUrl = convertFileSrc(ch.pdfPath);
+        const doc = await pdfjsLib.getDocument(pdfUrl).promise;
+        const arr = [];
+        for (let i = 1; i <= doc.numPages; i++)
+          arr.push({ name: `Page ${i}`, url: null, revoke: true, pdfDoc: doc, pdfPageNum: i });
+        pages = arr;
       } else {
         file = await ch.pdfHandle.getFile();
+        pages = await pdfFileToPages(file);
       }
-      pages = await pdfFileToPages(file);
     } catch(e) {
       $('page-display').innerHTML=`<div class="empty"><div class="ei">⚠</div>FAILED TO LOAD PDF</div>`;
       return;
     }
   } else if (IS_TAURI && ch.path) {
-    // Tauri native FS — read files directly from disk path
+    // Tauri native FS — assign asset URLs immediately, no IPC or base64 per page
     try {
       const entries = await invoke('read_dir', { path: ch.path });
       const imgs = entries
         .filter(e => !e.is_dir && isImg(e.name))
         .sort((a, b) => natCmp(a.name, b.name));
-      pages = imgs.map(e => ({ name: e.name, filePath: e.path, url: null, revoke: false }));
+      pages = imgs.map(e => ({ name: e.name, filePath: e.path, url: convertFileSrc(e.path), revoke: false }));
     } catch(e) {
       $('page-display').innerHTML=`<div class="empty"><div class="ei">⚠</div>FAILED TO READ CHAPTER</div>`;
       return;
@@ -1706,7 +1814,9 @@ async function preloadLocal(idxs) {
     if (pages[i].pdfDoc) {
       await preloadPdfPage(pages[i]);
     } else if (IS_TAURI && pages[i].filePath) {
-      pages[i].url = await invoke('read_file_as_data_url', { path: pages[i].filePath });
+      // Asset URL was assigned at chapter-open time — nothing to load here.
+      // This path is only reached if something cleared pages[i].url unexpectedly.
+      pages[i].url = convertFileSrc(pages[i].filePath);
     } else if (pages[i].handle) {
       const f=await pages[i].handle.getFile();
       pages[i].url=URL.createObjectURL(f);
@@ -1726,6 +1836,20 @@ const LOADING_PAGE = 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http:
 function freePages() {
   pages.forEach(p=>{ if(p.url&&p.revoke) URL.revokeObjectURL(p.url); });
   pages=[];
+}
+
+/** Formats a byte count into a human-readable string. */
+function formatBytes(bytes) {
+  if (bytes < 1024)             return `${bytes} B`;
+  if (bytes < 1024 * 1024)      return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/** Returns the text content for a series card badge. */
+function badgeText(s) {
+  const ch = `${s.chapters.length} CH`;
+  return s.size != null ? `${ch} · ${formatBytes(s.size)}` : ch;
 }
 
 /** Assigns a new cover URL to a series, revoking the previous one if it was a blob. */
@@ -1754,7 +1878,7 @@ function renderThumbs() {
 }
 
 /** Renders the active page (or spread pair) in the reading area. */
-const CONN_LOST_SVG = 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#111"/><text x="200" y="290" text-anchor="middle" fill="#b89ee8" font-family="monospace" font-size="13">CONNECTION LOST</text><text x="200" y="315" text-anchor="middle" fill="#9690a2" font-family="monospace" font-size="11">Proxy error — check node proxy.js</text></svg>');
+const CONN_LOST_SVG = 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="#111"/><text x="200" y="290" text-anchor="middle" fill="#b89ee8" font-family="monospace" font-size="13">FAILED TO LOAD</text><text x="200" y="315" text-anchor="middle" fill="#9690a2" font-family="monospace" font-size="11">Image could not be read from disk</text></svg>');
 function renderPage() {
   $('read-area').classList.toggle('rtl-mode', rtl);
   const display=$('page-display'); display.innerHTML='';
@@ -2177,21 +2301,16 @@ function mobileForward() {
 // UPDATE CHECKER
 // ═══════════════════════════════════════════════════════════════
 
-let _appVersion = '0.0.0';
+let _appVersion = '0.48.3';
 
-/** Resolves the current app version — reads from Tauri at runtime so it
- *  always matches tauri.conf.json without manual JS updates. */
+/** Resolves the current app version from the Tauri backend so it always
+ *  matches Cargo.toml. Falls back to the hardcoded default above. */
 async function getAppVersion() {
   if (!IS_TAURI) return '0.0.0';
   try {
-    // Try Tauri v2 app plugin if available
-    if (window.__TAURI__?.app?.getVersion) {
-      return await window.__TAURI__.app.getVersion();
-    }
+    return await invoke('get_app_version');
   } catch(_) {}
-  // App plugin unavailable — return a sentinel so the caller can
-  // skip the update check rather than comparing against a stale string.
-  return 'unknown';
+  return _appVersion; // keep the hardcoded fallback rather than returning 'unknown'
 }
 
 async function checkForUpdates(silent = false) {
@@ -2207,7 +2326,7 @@ async function checkForUpdates(silent = false) {
 function showUpdateBanner(version, releaseUrl) {
   const banner = $('update-banner');
   banner.innerHTML = `
-    <span>NeruYomi v${version} is available</span>
+    <span>NeruYomi v${esc(version)} is available</span>
     <a onclick="invoke('open_url',{url:${JSON.stringify(releaseUrl)}})">Download ↗</a>
     <button onclick="$('update-banner').style.display='none'" title="Dismiss">✕</button>`;
   banner.style.display = 'flex';
@@ -2233,6 +2352,11 @@ async function manualCheckUpdate() {
   } else {
     el.textContent = `UP TO DATE (v${result.currentVersion})`;
     el.style.color = '#27ae60';
+    // Restore the version label after a moment
+    setTimeout(() => {
+      el.textContent = `CURRENT: v${result.currentVersion}`;
+      el.style.color = '#9690a2';
+    }, 3000);
   }
 }
 
@@ -2253,10 +2377,7 @@ show('landing');
 if (IS_TAURI) {
   getAppVersion().then(v => {
     _appVersion = v;
-    $('update-status').textContent = v !== 'unknown' ? `v${v}` : 'VERSION UNKNOWN';
-    // Skip the update check if we couldn't resolve the running version —
-    // comparing 'unknown' against the latest tag would always report an update.
-    if (v === 'unknown') return null;
+    $('update-status').textContent = `CURRENT: v${v}`;
     return checkForUpdates(true);
   }).then(result => {
     if (result?.hasUpdate) showUpdateBanner(result.latestVersion, result.releaseUrl);

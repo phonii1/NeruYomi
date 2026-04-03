@@ -1,6 +1,6 @@
 [package]
 name = "neruyomi"
-version = "0.48.2"
+version = "0.48.3"
 edition = "2021"
 
 [build-dependencies]
@@ -8,7 +8,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 notify = "6"
-tauri              = { version = "2", features = [] }
+tauri              = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell  = "2"
 serde              = { version = "1", features = ["derive"] }

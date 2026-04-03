@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "com.neruyomi.reader",
   "productName": "NeruYomi",
-  "version": "0.48.2",
+  "version": "0.48.3",
 
   "build": {
     "frontendDist": "../dist"
@@ -21,8 +21,13 @@
       }
     ],
     "security": {
-      "csp": null
-    }
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    },
+    "withGlobalTauri": true
   },
 
   "bundle": {
