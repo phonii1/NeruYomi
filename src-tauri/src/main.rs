@@ -5,12 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use tauri::{command, AppHandle, Manager};
+use std::sync::Mutex;
+use tauri::{command, AppHandle, Emitter, Manager};
 
 // ═══════════════════════════════════════════════════════════════
 // MANGAUPDATES SEARCH
-// Two JS call sites: fetchMuInfo() and runIdentifySearch()
-// Both POST to /v1/series/search with { search, perpage }
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Serialize, Deserialize)]
@@ -19,12 +18,10 @@ struct MuSearchRequest {
     perpage: u32,
 }
 
-/// Searches MangaUpdates directly — no proxy needed, Rust bypasses CORS.
-/// Returns the raw JSON from the MU API so the existing JS parsing is untouched.
 #[command]
 async fn search_mu(search: String, perpage: u32) -> Result<Value, String> {
     let client = reqwest::Client::builder()
-        .user_agent("NeruYomi/0.48B")
+        .user_agent("NeruYomi/0.48.2B")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -50,9 +47,6 @@ async fn search_mu(search: String, perpage: u32) -> Result<Value, String> {
 
 // ═══════════════════════════════════════════════════════════════
 // LIBRARY PATH PERSISTENCE
-// Saves the folder path to the OS app-data directory so the
-// library reopens automatically on the next launch — no permission
-// dance, no IndexedDB, no "Re-open folder?" banner.
 // ═══════════════════════════════════════════════════════════════
 
 fn library_path_file(app: &AppHandle) -> Result<PathBuf, String> {
@@ -90,28 +84,26 @@ async fn clear_library_path(app: AppHandle) -> Result<(), String> {
 
 // ═══════════════════════════════════════════════════════════════
 // NATIVE FOLDER PICKER
-// Replaces window.showDirectoryPicker() — returns the chosen
-// folder path as a string. Tauri saves and can reopen it without
-// asking for permission again.
 // ═══════════════════════════════════════════════════════════════
 
 #[command]
 async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    // blocking_send() is fine here — this runs off the main thread
-    let path = app
-        .dialog()
-        .file()
-        .blocking_pick_folder();
-
-    Ok(path.map(|p| p.to_string()))
+    // blocking_pick_folder must not run on the async executor thread —
+    // move it to the blocking thread pool so the runtime stays responsive.
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .blocking_pick_folder()
+            .map(|p| p.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // ═══════════════════════════════════════════════════════════════
-// NATIVE FILE SYSTEM — read directory & file contents
-// Replaces the File System Access API handles. The JS sends a
-// path string; Rust reads the actual filesystem and returns data.
+// NATIVE FILE SYSTEM
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Serialize)]
@@ -121,7 +113,6 @@ struct FsEntry {
     is_dir: bool,
 }
 
-/// Lists immediate children of a directory path.
 #[command]
 async fn read_dir(path: String) -> Result<Vec<FsEntry>, String> {
     let entries = fs::read_dir(&path).map_err(|e| format!("read_dir({path}): {e}"))?;
@@ -137,8 +128,6 @@ async fn read_dir(path: String) -> Result<Vec<FsEntry>, String> {
     Ok(result)
 }
 
-/// Reads a file and returns it as a base64-encoded data URL.
-/// Used for cover images and PDF pages — the JS can set img.src directly.
 #[command]
 async fn read_file_as_data_url(path: String) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -159,12 +148,44 @@ async fn read_file_as_data_url(path: String) -> Result<String, String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// PDF PAGE COUNTER
+// Scans the raw PDF bytes for /Count entries without shipping the
+// whole file over IPC as base64. The root Pages node always holds
+// the largest /Count value, so we take the maximum found.
+// ═══════════════════════════════════════════════════════════════
+
+#[command]
+async fn count_pdf_pages(path: String) -> Result<u32, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("read({path}): {e}"))?;
+    let needle = b"/Count ";
+    let mut max_count: u32 = 0;
+    let mut i = 0;
+    while i + needle.len() < bytes.len() {
+        if bytes[i..i + needle.len()] == *needle {
+            let digits: Vec<u8> = bytes[i + needle.len()..]
+                .iter()
+                .take_while(|&&b| b.is_ascii_digit())
+                .copied()
+                .collect();
+            if let Ok(s) = std::str::from_utf8(&digits) {
+                if let Ok(n) = s.parse::<u32>() {
+                    if n > max_count {
+                        max_count = n;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    if max_count > 0 {
+        Ok(max_count)
+    } else {
+        Err("PDF page count not found".into())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // COVER IMAGE CACHE
-// Downloads MU cover images to app-data/covers/ on first fetch.
-// Returns a base64 data URL so the WebView never hits the network
-// again for the same cover. Survives app restarts indefinitely.
-// The identify override calls delete_cached_cover to force a
-// fresh download when the user switches to a different series.
 // ═══════════════════════════════════════════════════════════════
 
 fn covers_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -177,9 +198,6 @@ fn covers_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Downloads a cover image and caches it to disk.
-/// On subsequent calls for the same series_id the cached file is
-/// returned immediately without any network request.
 #[command]
 async fn cache_cover(
     app: AppHandle,
@@ -190,24 +208,22 @@ async fn cache_cover(
 
     let ext = url.rsplit('.').next().unwrap_or("jpg").to_lowercase();
     let safe_ext = match ext.as_str() {
-        "png" => "png",
+        "png"  => "png",
         "webp" => "webp",
-        "gif" => "gif",
-        _ => "jpg",
+        "gif"  => "gif",
+        _      => "jpg",
     };
 
     let cache_path = covers_dir(&app)?.join(format!("{}.{}", series_id, safe_ext));
 
-    // Return cached version if it already exists on disk
     if cache_path.exists() {
         let bytes = fs::read(&cache_path).map_err(|e| e.to_string())?;
         let mime = mime_for_ext(safe_ext);
         return Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)));
     }
 
-    // Download from MU CDN
     let client = reqwest::Client::builder()
-        .user_agent("NeruYomi/0.48B")
+        .user_agent("NeruYomi/0.48.2B")
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -220,15 +236,12 @@ async fn cache_cover(
         .await
         .map_err(|e| format!("cover read failed: {e}"))?;
 
-    // Write to disk
     fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
 
     let mime = mime_for_ext(safe_ext);
     Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)))
 }
 
-/// Deletes a cached cover so it will be re-downloaded on next open.
-/// Called by the identify override when the user picks a different series.
 #[command]
 async fn delete_cached_cover(app: AppHandle, series_id: String) -> Result<(), String> {
     let dir = covers_dir(&app)?;
@@ -251,6 +264,168 @@ fn mime_for_ext(ext: &str) -> &'static str {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// UPDATE CHECKER
+// Fetches all releases from GitHub and finds the latest -b tag.
+// ═══════════════════════════════════════════════════════════════
+
+/// Parses a "X.Y.Z" version string into a comparable (major, minor, patch) tuple.
+/// Returns None if the string isn't a valid three-part version.
+fn parse_ver(s: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = s.trim().splitn(3, '.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next()?.parse::<u32>().ok()?;
+    Some((major, minor, patch))
+}
+
+#[command]
+async fn check_for_updates(current_version: String) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("NeruYomi")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .get("https://api.github.com/repos/phonii1/NeruYomi/releases")
+        .send()
+        .await
+        .map_err(|e| format!("Update check failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub API returned {}", response.status()));
+    }
+
+    let releases: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Find the latest non-draft, non-prerelease tag ending in "-b"
+    let latest = releases
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find(|r| {
+                r["tag_name"].as_str().unwrap_or("").ends_with("-b")
+                    && !r["draft"].as_bool().unwrap_or(false)
+                    && !r["prerelease"].as_bool().unwrap_or(false)
+            })
+        });
+
+    let Some(release) = latest else {
+        return Ok(serde_json::json!({
+            "hasUpdate":      false,
+            "latestVersion":  current_version,
+            "currentVersion": current_version,
+            "releaseUrl":     "",
+            "releaseNotes":   "",
+        }));
+    };
+
+    let tag         = release["tag_name"].as_str().unwrap_or("");
+    let latest_ver  = tag.trim_start_matches('v').trim_end_matches("-b");
+    let current_ver = current_version.trim_start_matches('v').trim_end_matches("-b");
+
+    // Compare as (major, minor, patch) tuples so "0.10.0" > "0.9.0" correctly.
+    // Fall back to inequality check if either string doesn't parse.
+    let has_update = match (parse_ver(latest_ver), parse_ver(current_ver)) {
+        (Some(l), Some(c)) => l > c,
+        _ => !latest_ver.is_empty() && latest_ver != current_ver,
+    };
+
+    Ok(serde_json::json!({
+        "hasUpdate":      has_update,
+        "latestVersion":  latest_ver,
+        "currentVersion": current_ver,
+        "releaseUrl":     release["html_url"].as_str().unwrap_or(""),
+        "releaseNotes":   release["body"].as_str().unwrap_or(""),
+    }))
+}
+
+/// Opens a URL in the user's default system browser.
+#[command]
+async fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "", &url])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LIBRARY FILE WATCHER
+// Watches the library root folder for new subdirectories.
+// When a new series folder appears (e.g. downloaded by HakuNeko
+// or copied in manually), emits "library-changed" to the JS
+// frontend so it can refresh automatically — no manual reload.
+// ═══════════════════════════════════════════════════════════════
+
+/// Holds the watcher so it isn't dropped (which would stop watching).
+struct WatcherState(Mutex<Option<notify::RecommendedWatcher>>);
+
+#[command]
+async fn start_library_watcher(app: AppHandle, path: String) -> Result<(), String> {
+    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::time::Duration;
+
+    let app_clone = app.clone();
+
+    let mut watcher = RecommendedWatcher::new(
+        move |res: Result<Event, notify::Error>| {
+            if let Ok(event) = res {
+                // Only care about new folders being created
+                let is_create = matches!(event.kind, EventKind::Create(_));
+                if is_create {
+                    let has_new_dir = event.paths.iter().any(|p: &std::path::PathBuf| p.is_dir());
+                    if has_new_dir {
+                        // Emit to JS — debounce happens on the JS side
+                        let _ = app_clone.emit("library-changed", ());
+                    }
+                }
+            }
+        },
+        Config::default().with_poll_interval(Duration::from_secs(2)),
+    )
+    .map_err(|e| format!("watcher init failed: {e}"))?;
+
+    watcher
+        .watch(std::path::Path::new(&path), RecursiveMode::NonRecursive)
+        .map_err(|e| format!("watcher start failed: {e}"))?;
+
+    // Store in app state so it isn't dropped
+    app.state::<WatcherState>()
+        .0
+        .lock()
+        .unwrap()
+        .replace(watcher);
+
+    Ok(())
+}
+
+#[command]
+async fn stop_library_watcher(app: AppHandle) -> Result<(), String> {
+    app.state::<WatcherState>()
+        .0
+        .lock()
+        .unwrap()
+        .take(); // drops the watcher, stopping it
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════════════════════════
 
@@ -258,6 +433,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(WatcherState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             // MangaUpdates
             search_mu,
@@ -269,9 +445,16 @@ fn main() {
             pick_folder,
             read_dir,
             read_file_as_data_url,
+            count_pdf_pages,
             // Cover image cache
             cache_cover,
             delete_cached_cover,
+            // Updates
+            check_for_updates,
+            open_url,
+            // Library watcher
+            start_library_watcher,
+            stop_library_watcher,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NeruYomi");

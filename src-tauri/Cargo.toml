@@ -1,12 +1,13 @@
 [package]
 name = "neruyomi"
-version = "0.48.1"
+version = "0.48.2"
 edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+notify = "6"
 tauri              = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell  = "2"
@@ -17,5 +18,3 @@ reqwest            = { version = "0.12", features = ["json", "rustls-tls"], defa
 # base64 for read_file_as_data_url
 base64             = "0.22"
 tokio              = { version = "1", features = ["full"] }
-
-[package.metadata.tauri]
