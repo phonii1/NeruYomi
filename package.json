@@ -1,6 +1,6 @@
 {
   "name": "neruyomi",
-  "version": "0.48.4b",
+  "version": "0.49.0b",
   "scripts": {
     "dev":   "tauri dev",
     "build": "tauri build"

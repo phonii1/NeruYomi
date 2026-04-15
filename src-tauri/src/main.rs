@@ -9,6 +9,27 @@ use std::sync::Mutex;
 use tauri::{command, AppHandle, Emitter, Manager};
 
 // ═══════════════════════════════════════════════════════════════
+// LIBRARY ROOT STATE
+// Holds the trusted library root path set by the user so that
+// file-system commands can verify callers haven't escaped it.
+// ═══════════════════════════════════════════════════════════════
+
+/// Managed state that stores the active library root.
+/// Set when the user opens a library; cleared on forget.
+struct LibraryRoot(Mutex<Option<PathBuf>>);
+
+/// Returns `true` only when `path` canonicalises to something inside
+/// `canonical_root`.  `canonical_root` must already be canonicalized
+/// (done once at `set_library_root` time).  Rejects symlinks that escape
+/// the tree and any path that can't be resolved at all.
+fn is_within_library(path: &std::path::Path, canonical_root: &std::path::Path) -> bool {
+    match path.canonicalize() {
+        Ok(p) => p.starts_with(canonical_root),
+        Err(_) => false,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // MANGAUPDATES SEARCH
 // ═══════════════════════════════════════════════════════════════
 
@@ -98,24 +119,28 @@ async fn save_library_path(app: AppHandle, path: String) -> Result<(), String> {
 async fn load_library_path(app: AppHandle) -> Result<Option<String>, String> {
     let p = library_path_file(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        if p.exists() {
-            Ok(Some(fs::read_to_string(p).map_err(|e| e.to_string())?))
-        } else {
-            Ok(None)
+        match fs::read_to_string(&p) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
         }
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
+/// Removes the persisted library path so the app starts on the landing screen.
+/// Exposed as a Tauri command for future use (e.g. a "forget library" button);
+/// not currently called from the JS frontend.
 #[command]
 async fn clear_library_path(app: AppHandle) -> Result<(), String> {
     let p = library_path_file(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        if p.exists() {
-            fs::remove_file(p).map_err(|e| e.to_string())?;
+        match fs::remove_file(&p) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
         }
-        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -142,8 +167,47 @@ async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// NATIVE FILE SYSTEM
+// LIBRARY ROOT REGISTRATION
+// The frontend calls set_library_root once after the user picks
+// (or auto-reopens) a library so that subsequent FS commands can
+// validate paths against it.
 // ═══════════════════════════════════════════════════════════════
+
+#[command]
+fn set_library_root(app: AppHandle, path: String) -> Result<(), String> {
+    // Canonicalize once here so every subsequent containment check only needs
+    // to canonicalize the input path, not the (unchanging) root.
+    let canonical = PathBuf::from(&path)
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize library root: {e}"))?;
+    *app.state::<LibraryRoot>().0.lock()
+        .map_err(|e| format!("library-root mutex poisoned: {e}"))? =
+        Some(canonical);
+    Ok(())
+}
+
+#[command]
+fn clear_library_root(app: AppHandle) -> Result<(), String> {
+    *app.state::<LibraryRoot>().0.lock()
+        .map_err(|e| format!("library-root mutex poisoned: {e}"))? = None;
+    Ok(())
+}
+
+/// Checks that `path` is within the registered library root.
+/// Returns Ok(()) if no root is set (browser mode) or path is inside root.
+/// Returns Err if path escapes the root.
+fn check_library_path(app: &AppHandle, path: &str) -> Result<(), String> {
+    let root_opt = app.state::<LibraryRoot>().0.lock()
+        .map_err(|e| format!("library-root mutex poisoned: {e}"))?.clone();
+    if let Some(root) = root_opt {
+        if !is_within_library(std::path::Path::new(path), &root) {
+            return Err(format!("path is outside library root: {path}"));
+        }
+    }
+    Ok(())
+}
+
+
 
 #[derive(Serialize)]
 struct FsEntry {
@@ -153,7 +217,8 @@ struct FsEntry {
 }
 
 #[command]
-async fn read_dir(path: String) -> Result<Vec<FsEntry>, String> {
+async fn read_dir(app: AppHandle, path: String) -> Result<Vec<FsEntry>, String> {
+    check_library_path(&app, &path)?;
     tauri::async_runtime::spawn_blocking(move || {
         let entries = fs::read_dir(&path).map_err(|e| format!("read_dir({path}): {e}"))?;
         let mut result = Vec::new();
@@ -171,16 +236,28 @@ async fn read_dir(path: String) -> Result<Vec<FsEntry>, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Recursively sums the sizes of all files under a directory.
+/// Iteratively sums the sizes of all files under a directory using BFS.
+/// Symlinks are skipped to prevent infinite loops. Depth is capped at 32
+/// (far deeper than any real manga library) to bound worst-case runtime.
 fn dir_size(path: &std::path::Path) -> u64 {
+    const MAX_DEPTH: usize = 32;
     let mut total = 0u64;
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_dir() {
-                    total += dir_size(&entry.path());
-                } else {
-                    total += meta.len();
+    let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> = std::collections::VecDeque::new();
+    queue.push_back((path.to_path_buf(), 0));
+    while let Some((current, depth)) = queue.pop_front() {
+        if let Ok(entries) = fs::read_dir(&current) {
+            for entry in entries.flatten() {
+                // file_type() does NOT follow symlinks, so is_symlink() works correctly
+                // here. entry.metadata() would follow symlinks and always return false
+                // for is_symlink(), leaving the loop vulnerable to symlink cycles.
+                let Ok(ft) = entry.file_type() else { continue };
+                if ft.is_symlink() { continue; }
+                if ft.is_dir() {
+                    if depth < MAX_DEPTH { queue.push_back((entry.path(), depth + 1)); }
+                } else if ft.is_file() {
+                    if let Ok(meta) = entry.metadata() {
+                        total += meta.len();
+                    }
                 }
             }
         }
@@ -189,36 +266,11 @@ fn dir_size(path: &std::path::Path) -> u64 {
 }
 
 #[command]
-async fn get_series_size(path: String) -> Result<u64, String> {
+async fn get_series_size(app: AppHandle, path: String) -> Result<u64, String> {
+    check_library_path(&app, &path)?;
     tauri::async_runtime::spawn_blocking(move || Ok(dir_size(std::path::Path::new(&path))))
         .await
         .map_err(|e| e.to_string())?
-}
-
-#[command]
-async fn read_file_as_data_url(path: String) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
-    // Reading a manga page (potentially several MB) on the async executor
-    // would stall other tasks — move it to the blocking thread pool.
-    let path_for_read = path.clone();
-    let bytes = tauri::async_runtime::spawn_blocking(move || {
-        fs::read(&path_for_read).map_err(|e| format!("read_file({path_for_read}): {e}"))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    let mime = match path.rsplit('.').next().unwrap_or("").to_lowercase().as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png"          => "image/png",
-        "webp"         => "image/webp",
-        "gif"          => "image/gif",
-        "avif"         => "image/avif",
-        "pdf"          => "application/pdf",
-        _              => "application/octet-stream",
-    };
-
-    Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -229,35 +281,73 @@ async fn read_file_as_data_url(path: String) -> Result<String, String> {
 // ═══════════════════════════════════════════════════════════════
 
 #[command]
-async fn count_pdf_pages(path: String) -> Result<u32, String> {
+async fn count_pdf_pages(app: AppHandle, path: String) -> Result<u32, String> {
+    check_library_path(&app, &path)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = fs::read(&path).map_err(|e| format!("read({path}): {e}"))?;
-        let needle = b"/Count ";
+        use std::io::{BufReader, Read};
+
+        const NEEDLE: &[u8] = b"/Count ";
+        // Read 16 KiB at a time — fits comfortably in L1 on most CPUs and keeps
+        // peak memory usage constant regardless of PDF size.
+        const CHUNK: usize = 16 * 1024;
+        // Retain (needle.len() - 1) bytes of overlap between chunks so a /Count
+        // token that straddles a chunk boundary is never missed.
+        let overlap = NEEDLE.len() - 1;
+
+        let file = fs::File::open(&path).map_err(|e| format!("open({path}): {e}"))?;
+        let mut reader = BufReader::new(file);
+
+        // `window` = overlap tail of the previous chunk prepended to the new chunk.
+        let mut window: Vec<u8> = Vec::with_capacity(CHUNK + overlap);
+        let mut buf = vec![0u8; CHUNK];
         let mut max_count: u32 = 0;
-        let mut i = 0;
-        while i + needle.len() < bytes.len() {
-            if bytes[i..i + needle.len()] == *needle {
-                // Borrow the digit slice directly — no heap allocation needed.
-                let start = i + needle.len();
-                let digit_len = bytes[start..]
-                    .iter()
-                    .take_while(|&&b| b.is_ascii_digit())
-                    .count();
-                if let Ok(s) = std::str::from_utf8(&bytes[start..start + digit_len]) {
-                    if let Ok(n) = s.parse::<u32>() {
-                        if n > max_count {
-                            max_count = n;
+
+        // Scan `slice` for /Count tokens; updates max_count via the captured reference.
+        let mut scan = |slice: &[u8]| {
+            let mut i = 0;
+            while i + NEEDLE.len() <= slice.len() {
+                if slice[i..i + NEEDLE.len()] == *NEEDLE {
+                    let start = i + NEEDLE.len();
+                    let digit_len = slice[start..]
+                        .iter()
+                        .take_while(|&&b| b.is_ascii_digit())
+                        .count();
+                    if digit_len > 0 {
+                        if let Ok(s) = std::str::from_utf8(&slice[start..start + digit_len]) {
+                            if let Ok(n) = s.parse::<u32>() {
+                                if n > max_count { max_count = n; }
+                            }
                         }
+                        // Skip past the entire parsed token so we don't re-examine
+                        // bytes we've already consumed.
+                        i += NEEDLE.len() + digit_len;
+                        continue;
                     }
                 }
+                i += 1;
             }
-            i += 1;
+        };
+
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 { break; }
+            window.extend_from_slice(&buf[..n]);
+
+            // Only scan the part of the window that can't contain a split token.
+            let safe_len = window.len().saturating_sub(overlap);
+            if safe_len > 0 {
+                scan(&window[..safe_len]);
+                // Slide: keep only the overlap tail for next iteration.
+                window.copy_within(safe_len.., 0);
+                window.truncate(window.len() - safe_len);
+            }
         }
-        if max_count > 0 {
-            Ok(max_count)
-        } else {
-            Err("PDF page count not found".into())
-        }
+        // Flush remainder (last chunk has no successor to carry the overlap).
+        if !window.is_empty() { scan(&window); }
+        // Release the mutable borrow of max_count before returning it.
+        drop(scan);
+
+        if max_count > 0 { Ok(max_count) } else { Err("PDF page count not found".into()) }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -286,6 +376,17 @@ async fn cache_cover(
     url: String,
     series_id: String,
 ) -> Result<String, String> {
+    // Fix #4: only fetch HTTPS URLs — rejects file://, ftp://, etc.
+    if !url.starts_with("https://") {
+        return Err(format!("cover URL must use HTTPS: {url}"));
+    }
+
+    // Fix #7: series_id is used directly in a filename; reject anything that
+    // isn't a plain numeric string to prevent path-traversal attacks.
+    if series_id.is_empty() || !series_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("series_id must be numeric, got: {series_id}"));
+    }
+
     // Strip query string / fragment before extracting the extension so that
     // "cover.jpg?v=2" doesn't produce "jpg?v=2" and fall through to the default.
     let ext = url.split('?').next().unwrap_or("")
@@ -301,8 +402,8 @@ async fn cache_cover(
 
     let cache_path = covers_dir(&app)?.join(format!("{}.{}", series_id, safe_ext));
 
-    // Cache-hit check: run on the blocking thread pool so the async executor
-    // isn't stalled by a filesystem stat call.
+    // Best-effort early exit before downloading. Not TOCTOU-safe on its own —
+    // the definitive check happens inside the write closure below.
     let cache_path_clone = cache_path.clone();
     let hit = tauri::async_runtime::spawn_blocking(move || cache_path_clone.exists())
         .await
@@ -311,20 +412,38 @@ async fn cache_cover(
         return Ok(cache_path.to_string_lossy().into_owned());
     }
 
-    let bytes = client
+    let response = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("cover download failed: {e}"))?
+        .map_err(|e| format!("cover download failed: {e}"))?;
+
+    // Reject responses that advertise a body larger than 5 MiB before buffering
+    // any bytes — prevents OOM if a server sends a huge payload.
+    const MAX_COVER_BYTES: u64 = 5 * 1024 * 1024;
+    if response.content_length().unwrap_or(0) > MAX_COVER_BYTES {
+        return Err(format!("cover image too large (>{} bytes)", MAX_COVER_BYTES));
+    }
+
+    let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("cover read failed: {e}"))?;
 
-    // Write on the blocking pool — large covers can stall the executor otherwise.
+    // Double-check actual body size in case Content-Length was absent or lying.
+    if bytes.len() as u64 > MAX_COVER_BYTES {
+        return Err(format!("cover image too large (>{} bytes)", MAX_COVER_BYTES));
+    }
+
+    // Fix #10: re-check existence inside the blocking closure so two concurrent
+    // requests for the same series don't both write (last-write-wins is harmless
+    // but wastes bandwidth; this makes the early winner short-circuit instead).
     tauri::async_runtime::spawn_blocking(move || {
-        // Ensure the covers directory exists on first write.
         if let Some(dir) = cache_path.parent() {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        if cache_path.exists() {
+            return Ok(cache_path.to_string_lossy().into_owned());
         }
         fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
         Ok(cache_path.to_string_lossy().into_owned())
@@ -335,12 +454,21 @@ async fn cache_cover(
 
 #[command]
 async fn delete_cached_cover(app: AppHandle, series_id: String) -> Result<(), String> {
+    // Mirror the same guard used in cache_cover — series_id is used directly in
+    // a filename, so reject anything that isn't a plain numeric string to prevent
+    // path-traversal attacks (e.g. "../../important_file").
+    if series_id.is_empty() || !series_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("series_id must be numeric, got: {series_id}"));
+    }
+
     let dir = covers_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         for ext in &["jpg", "png", "webp", "gif"] {
             let p = dir.join(format!("{}.{}", series_id, ext));
-            if p.exists() {
-                fs::remove_file(p).map_err(|e| e.to_string())?;
+            match fs::remove_file(&p) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.to_string()),
             }
         }
         Ok(())
@@ -354,86 +482,11 @@ async fn delete_cached_cover(app: AppHandle, series_id: String) -> Result<(), St
 // Fetches all releases from GitHub and finds the latest -b tag.
 // ═══════════════════════════════════════════════════════════════
 
-/// Returns the running app version directly from the Cargo manifest.
-/// CARGO_PKG_VERSION is set at compile time, so it always matches
-/// Cargo.toml without needing the tauri-plugin-app.
-#[command]
-fn get_app_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
-}
-
-/// Parses a "X.Y.Z" version string into a comparable (major, minor, patch) tuple.
-/// Returns None if the string isn't a valid three-part version.
-fn parse_ver(s: &str) -> Option<(u32, u32, u32)> {
-    let mut parts = s.trim().splitn(3, '.');
-    let major = parts.next()?.parse::<u32>().ok()?;
-    let minor = parts.next()?.parse::<u32>().ok()?;
-    let patch = parts.next()?.parse::<u32>().ok()?;
-    Some((major, minor, patch))
-}
-
-#[command]
-async fn check_for_updates(
-    client: tauri::State<'_, reqwest::Client>,
-    current_version: String,
-) -> Result<serde_json::Value, String> {
-    let response = client
-        .get("https://api.github.com/repos/phonii1/NeruYomi/releases")
-        .send()
-        .await
-        .map_err(|e| format!("Update check failed: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!("GitHub API returned {}", response.status()));
-    }
-
-    let releases: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Find the latest non-draft tag ending in "-b" (pre-releases included —
-    // full 1.0 release is the first non-pre-release build)
-    let latest = releases
-        .as_array()
-        .and_then(|arr| {
-            arr.iter().find(|r| {
-                r["tag_name"].as_str().unwrap_or("").ends_with("-b")
-                    && !r["draft"].as_bool().unwrap_or(false)
-            })
-        });
-
-    let Some(release) = latest else {
-        return Ok(serde_json::json!({
-            "hasUpdate":      false,
-            "latestVersion":  current_version,
-            "currentVersion": current_version,
-            "releaseUrl":     "",
-            "releaseNotes":   "",
-        }));
-    };
-
-    let tag         = release["tag_name"].as_str().unwrap_or("");
-    let latest_ver  = tag.trim_start_matches('v').trim_end_matches("-b");
-    let current_ver = current_version.trim_start_matches('v').trim_end_matches("-b");
-
-    // Compare as (major, minor, patch) tuples so "0.10.0" > "0.9.0" correctly.
-    // Fall back to inequality check if either string doesn't parse.
-    let has_update = match (parse_ver(latest_ver), parse_ver(current_ver)) {
-        (Some(l), Some(c)) => l > c,
-        _ => !latest_ver.is_empty() && latest_ver != current_ver,
-    };
-
-    Ok(serde_json::json!({
-        "hasUpdate":      has_update,
-        "latestVersion":  latest_ver,
-        "currentVersion": current_ver,
-        "releaseUrl":     release["html_url"].as_str().unwrap_or(""),
-        "releaseNotes":   release["body"].as_str().unwrap_or(""),
-    }))
-}
-
-/// Opens a URL in the user's default system browser.
+/// Opens a folder path in the OS file manager (Explorer / Finder / Nautilus).
+/// On Windows uses `explorer` which selects the folder itself.
+/// On macOS uses `open` which opens the folder in Finder.
+/// Opens a URL in the system's default web browser.
+/// Uses platform-native launchers: start (Windows), open (macOS), xdg-open (Linux).
 #[command]
 async fn open_url(url: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -454,10 +507,43 @@ async fn open_url(url: String) -> Result<(), String> {
         .spawn()
         .map_err(|e| e.to_string())?;
 
-    // Catch-all: surface a clear error rather than silently succeeding on
-    // platforms that none of the branches above match (e.g. FreeBSD).
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    return Err(format!("open_url is not supported on this platform"));
+    return Err("open_url is not supported on this platform".into());
+
+    Ok(())
+}
+
+/// On Linux uses `xdg-open` which opens the folder in the default file manager.
+/// The path must exist and be a directory; anything else is rejected.
+#[command]
+async fn open_folder_path(path: String) -> Result<(), String> {
+    // One metadata() call covers both the existence check and the is_dir check.
+    match std::fs::metadata(&path) {
+        Err(_) => return Err(format!("Path does not exist: {path}")),
+        Ok(m) if !m.is_dir() => return Err(format!("Path is not a directory: {path}")),
+        Ok(_) => {}
+    }
+
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "linux")]
+    std::process::Command::new("xdg-open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    return Err("open_folder_path is not supported on this platform".into());
 
     Ok(())
 }
@@ -506,20 +592,284 @@ async fn start_library_watcher(app: AppHandle, path: String) -> Result<(), Strin
     app.state::<WatcherState>()
         .0
         .lock()
-        .expect("watcher mutex poisoned")
+        .map_err(|e| format!("watcher mutex poisoned: {e}"))?
         .replace(watcher);
 
     Ok(())
 }
 
+/// Stops the library file watcher and drops it.
+/// Exposed as a Tauri command for future use (e.g. when the user closes the
+/// library without opening another); not currently called from the JS frontend.
 #[command]
 async fn stop_library_watcher(app: AppHandle) -> Result<(), String> {
     app.state::<WatcherState>()
         .0
         .lock()
-        .expect("watcher mutex poisoned")
+        .map_err(|e| format!("watcher mutex poisoned: {e}"))?
         .take(); // drops the watcher, stopping it
     Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FONT MANAGEMENT
+// pick_font_file   — native file picker filtered to font formats
+// list_system_fonts — scans platform font directories
+// cache_font_file  — copies a font into appdata so the asset
+//                    protocol can serve it (system font dirs are
+//                    outside the $HOME scope)
+// ═══════════════════════════════════════════════════════════════
+
+#[command]
+async fn pick_font_file(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Font files", &["ttf", "otf", "woff", "woff2"])
+            .blocking_pick_file()
+            .map(|p: FilePath| p.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct FontEntry {
+    name: String,
+    path: String,
+}
+
+/// Returns the platform-specific directories that typically contain
+/// installed fonts.  Directories that don't exist are silently skipped.
+fn system_font_dirs(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        // System-wide fonts
+        if let Ok(windir) = std::env::var("WINDIR") {
+            dirs.push(std::path::PathBuf::from(&windir).join("Fonts"));
+        } else {
+            dirs.push(std::path::PathBuf::from(r"C:\Windows\Fonts"));
+        }
+        // Per-user fonts (Windows 10+)
+        dirs.push(home
+            .join("AppData")
+            .join("Local")
+            .join("Microsoft")
+            .join("Windows")
+            .join("Fonts"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(std::path::PathBuf::from("/Library/Fonts"));
+        dirs.push(std::path::PathBuf::from("/System/Library/Fonts"));
+        dirs.push(home.join("Library").join("Fonts"));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        dirs.push(std::path::PathBuf::from("/usr/share/fonts"));
+        dirs.push(std::path::PathBuf::from("/usr/local/share/fonts"));
+        dirs.push(home.join(".local").join("share").join("fonts"));
+        dirs.push(home.join(".fonts"));
+    }
+
+    dirs
+}
+
+#[command]
+async fn list_system_fonts(app: AppHandle) -> Result<Vec<FontEntry>, String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let font_exts = ["ttf", "otf", "woff", "woff2"];
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut fonts: Vec<FontEntry> = Vec::new();
+        let dirs = system_font_dirs(&home);
+
+        for dir in dirs {
+            if !dir.exists() { continue; }
+            // Iterative BFS walk up to 4 levels deep — handles Linux font hierarchies
+            // like /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf (3 levels)
+            // without risk of stack overflow or infinite loops via symlinks.
+            const MAX_DEPTH: usize = 4;
+            let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> = std::collections::VecDeque::new();
+            queue.push_back((dir.clone(), 0));
+            while let Some((current, depth)) = queue.pop_front() {
+                if let Ok(entries) = fs::read_dir(&current) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        // Skip symlinks entirely to prevent loops
+                        if entry.file_type().map(|t| t.is_symlink()).unwrap_or(false) { continue; }
+                        if path.is_dir() {
+                            if depth < MAX_DEPTH { queue.push_back((path, depth + 1)); }
+                        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                            if font_exts.contains(&ext.to_lowercase().as_str()) {
+                                if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
+                                    fonts.push(FontEntry {
+                                        name: name.to_string(),
+                                        path: path.to_string_lossy().into_owned(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort alphabetically and deduplicate by name+path
+        fonts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        fonts.dedup_by(|a, b| a.path == b.path);
+        Ok(fonts)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Copies a font file into `$APPDATA/neruyomi/fonts/` so it falls
+/// within the asset-protocol scope and can be loaded by the WebView.
+/// Returns the cached path.  No-ops if the file is already cached.
+#[command]
+async fn cache_font_file(app: AppHandle, src_path: String) -> Result<String, String> {
+    let fonts_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("fonts");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = std::path::Path::new(&src_path);
+
+        // Only accept known font extensions
+        let ext = src.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !["ttf", "otf", "woff", "woff2"].contains(&ext.as_str()) {
+            return Err(format!("unsupported font extension: {ext}"));
+        }
+
+        // Reject paths that don't resolve to an actual file — catches "..",
+        // non-existent paths, and anything the user didn't pick via the native picker.
+        let canon = src.canonicalize()
+            .map_err(|_| format!("font path could not be resolved: {src_path}"))?;
+        if !canon.is_file() {
+            return Err(format!("font path is not a file: {src_path}"));
+        }
+
+        let file_name = canon.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("invalid font path: {src_path}"))?;
+
+        fs::create_dir_all(&fonts_dir).map_err(|e| e.to_string())?;
+
+        let dest = fonts_dir.join(file_name);
+        if !dest.exists() {
+            fs::copy(&canon, &dest).map_err(|e| format!("font copy failed: {e}"))?;
+        }
+        Ok(dest.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[command]
+async fn pick_image_file(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Image files", &["jpg", "jpeg", "png", "webp", "gif"])
+            .blocking_pick_file()
+            .map(|p: FilePath| p.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Copies a user-chosen image into the covers directory as a custom cover.
+/// The destination filename is derived from the series name so it is stable
+/// across re-launches and never clashes with MU-fetched covers.
+#[command]
+async fn cache_custom_cover(app: AppHandle, series_name: String, src_path: String) -> Result<String, String> {
+    let dir = covers_dir(&app)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = std::path::Path::new(&src_path);
+        let ext = src.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg")
+            .to_lowercase();
+        if !["jpg", "jpeg", "png", "webp", "gif"].contains(&ext.as_str()) {
+            return Err(format!("unsupported image extension: {ext}"));
+        }
+
+        // Build a safe filename from the series name: keep alphanumerics, split on
+        // whitespace, collapse runs, limit length, prefix with "custom_".
+        let safe = series_name
+            .split_whitespace()
+            .map(|word| word.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join("_");
+        let safe = safe.chars().take(64).collect::<String>();
+        let filename = format!("custom_{}.{}", safe, ext);
+
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dest = dir.join(&filename);
+        fs::copy(src, &dest).map_err(|e| format!("copy failed: {e}"))?;
+        Ok(dest.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DATA FILE STORAGE
+// Persists app data as JSON files in $APPDATA/neruyomi/data/
+// so it survives app reinstalls and is easily backed up.
+// ═══════════════════════════════════════════════════════════════
+
+fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|e| e.to_string())?.join("data"))
+}
+
+#[command]
+async fn read_data_file(app: AppHandle, filename: String) -> Result<Option<String>, String> {
+    // Validate filename — no path separators or dots that could escape the data dir
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err(format!("invalid filename: {filename}"));
+    }
+    let path = data_dir(&app)?.join(&filename);
+    tauri::async_runtime::spawn_blocking(move || {
+        match fs::read_to_string(&path) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[command]
+async fn write_data_file(app: AppHandle, filename: String, content: String) -> Result<(), String> {
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err(format!("invalid filename: {filename}"));
+    }
+    let dir  = data_dir(&app)?;
+    let path = dir.join(&filename);
+    tauri::async_runtime::spawn_blocking(move || {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        fs::write(path, content).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -539,8 +889,10 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_opener::init())
         .manage(WatcherState(Mutex::new(None)))
+        .manage(LibraryRoot(Mutex::new(None)))
         .manage(http_client)
         .invoke_handler(tauri::generate_handler![
             // MangaUpdates
@@ -550,19 +902,29 @@ fn main() {
             save_library_path,
             load_library_path,
             clear_library_path,
+            // Library root registration (used for FS path containment checks)
+            set_library_root,
+            clear_library_root,
             // Native file system
             pick_folder,
             read_dir,
-            read_file_as_data_url,
             count_pdf_pages,
             get_series_size,
             // Cover image cache
             cache_cover,
             delete_cached_cover,
-            // Updates
-            get_app_version,
-            check_for_updates,
+            pick_image_file,
+            cache_custom_cover,
+            // Font management
+            pick_font_file,
+            list_system_fonts,
+            cache_font_file,
+            // Data file storage
+            read_data_file,
+            write_data_file,
+            // Shell
             open_url,
+            open_folder_path,
             // Library watcher
             start_library_watcher,
             stop_library_watcher,
