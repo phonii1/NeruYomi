@@ -1,0 +1,345 @@
+# NeruYomi — Technical Memo
+
+## Overview
+
+NeruYomi is a single-window desktop application built with Tauri v2. The frontend is a single HTML page (`index.html`) that loads seven JavaScript modules in sequence. There is no bundler, no framework, and no virtual DOM — the UI is constructed directly from vanilla JS with DOM APIs. The Rust backend handles all filesystem operations, native dialogs, network proxying, and the update pipeline.
+
+---
+
+## Process Architecture
+
+The application runs as a WebView2 window (Windows), WKWebView (macOS), or WebKitGTK (Linux) hosted inside a Tauri shell. The JavaScript frontend communicates with the Rust backend exclusively through `invoke()`, a typed async IPC bridge that serialises calls to JSON and dispatches them to `#[tauri::command]` handlers. There is no HTTP server — all communication is over Tauri's internal IPC channel.
+
+A second communication direction exists for Rust-to-JS events: the library file watcher fires a `library-changed` event over Tauri's event system, received in JavaScript via `tauriListen()`. This function reads from `window.__TAURI__.event.listen` first and falls back to the `__TAURI_INTERNALS__` path only if the public API is unavailable.
+
+The asset protocol (`asset://localhost/` on macOS/Linux, `https://asset.localhost/` on Windows) is used to serve local files — cover images and PDF source files — directly to the WebView without IPC or base64 encoding. This is the primary reason reading performance is fast: image URLs are path-transformed strings, not memory transfers.
+
+---
+
+## Module Load Order and Dependencies
+
+Scripts are loaded synchronously in this order:
+
+```
+pdf.min.js        — PDF.js worker (third-party)
+utils.js          — Pure helpers, Tauri bridge, icon SVGs
+store.js          — Data persistence layer, MU API shims
+settings.js       — Theme engine, font management, settings panel
+mu.js             — MangaUpdates metadata, cover queue, throttle
+update.js         — Update checker and installer
+library.js        — Library loading, rendering, chapter management, reader state
+reader.js         — Page rendering, strip mode, zoom/pan, navigation
+index.html        — State objects, init sequence, view helpers
+```
+
+Each module declares its dependencies in a comment header. There are no ES modules or imports — everything shares a single global scope. This is intentional: it avoids a build step and keeps the development loop as fast as saving a file and reloading.
+
+---
+
+## Global State
+
+Three principal state objects are defined in `index.html` and accessed across all modules:
+
+**`library`**
+```
+rootHandle   — { name, _path } in Tauri; FileSystemDirectoryHandle in FSAPI mode
+items        — array of series objects: { name, path, chapters, coverUrl, size, muInfo }
+curSeries    — the currently open series object, or null
+curChIdx     — index into curSeries.chapters of the open chapter
+```
+
+**`reader`**
+```
+pages        — array of page objects: { name, url, revoke, filePath?, pdfDoc?, pdfPageNum? }
+curPage      — current page index
+spread       — two-page spread active
+strip        — long strip mode active
+rtl          — right-to-left reading direction
+zoom         — current zoom multiplier
+src          — always 'local'
+panX, panY   — pixel offsets for zoom-and-pan
+```
+
+**`ui`**
+```
+activeView      — the currently visible .view element
+activeTab       — 'library' or 'bookmarks'
+currentView     — string ID of the active view ('landing'|'library'|'chapters'|'reader')
+navHistory      — stack for forward navigation
+chSortAsc       — chapter list sort direction
+activeGenres    — Set of genre strings for filter
+libSort         — library sort key ('az'|'za'|'size-asc'|etc.)
+selectMode      — multi-select mode active
+selectedSeries  — Set of series names currently selected
+```
+
+`userSettings` (in `settings.js`) holds the four persisted preferences: direction, layout, theme, density.
+
+---
+
+## Data Persistence Layer (`store.js`)
+
+All persistent data is stored in a single in-memory object `_store`, keyed by filename. On startup, `loadAllData()` reads all eight JSON files from disk (Tauri) or from `localStorage` (browser) and populates `_store`. All subsequent reads are synchronous via `getData(filename)`. Writes call `saveData(filename, data)` which updates `_store` immediately and then fires an async `invoke('write_data_file', ...)` in the background — writes never block the UI.
+
+On first launch after upgrading from an older build, `loadAllData()` migrates legacy `localStorage` keys (`ny_bookmarks`, `ny_progress`, etc.) to their corresponding JSON files and removes the old keys.
+
+The MU metadata cache (`muCache`) is loaded separately by `_initMuCache()`, which runs immediately after `loadAllData()`. It evicts entries older than 30 days and entries that predate the `status` field addition before assigning the result to the `muCache` variable.
+
+---
+
+## Startup Sequence
+
+The `init()` async IIFE runs after all scripts have loaded:
+
+1. `loadAllData()` — reads all JSON files from disk in parallel via `Promise.allSettled`
+2. Store variables are assigned from `_store` (`bookmarks`, `muOverrides`, `readProgress`, `coverIndex`, etc.)
+3. `_initMuCache()` — populates `muCache` with eviction
+4. `initSettings()` — reads `settings.json`, applies theme, density, fonts, restores custom theme if active
+5. Event handlers and logo click are wired up
+6. `show('landing')` — landing view is displayed
+7. Version is resolved from the Tauri backend via `window.__TAURI__.app.getVersion()`
+8. Silent update check fires in the background
+9. `load_library_path` is called; if a saved path exists, `_loadLibraryFromPath()` runs and the library opens automatically
+
+---
+
+## Library Loading
+
+### Tauri path (`_loadLibraryFromPath`)
+
+1. `read_dir` is called on the library root — one IPC call returns all top-level entries
+2. Entries are filtered to directories, excluding `_trash`
+3. For each directory, `getChaptersTauri()` calls `read_dir` on the series folder and classifies entries as image directories or PDF files
+4. Series objects are pushed to `library.items`
+5. `renderLibrary()` renders the grid immediately with placeholder covers
+6. `loadCoverTauri()` and `loadSeriesSize()` run in the background for each series
+7. `start_library_watcher` is invoked to begin watching the root folder for changes
+
+### FSAPI path (browser)
+
+Same structure but using the `FileSystemDirectoryHandle` API. Handles are stored on series and chapter objects rather than string paths. There is no cover caching or size computation in browser mode.
+
+### Cover resolution
+
+For each series, `loadCoverTauri()` first checks `coverIndex` for a previously cached cover path. If found, it applies the cover immediately via `convertFileSrc()` and fires `_applyMuMetadataOnly()` in the background to load metadata without re-fetching the cover. If not cached, it enqueues the series into the MU cover queue (`enqueueMuCover`). The queue drains sequentially for API calls and in parallel for cache hits, using `_muThrottle()` to enforce a 500ms minimum gap between requests.
+
+Both `loadCoverTauri` and `loadSeriesSize` check `library.items.includes(series)` after every `await`. If the library was replaced while the async operation was in flight, the function bails out immediately without writing stale data to the DOM.
+
+---
+
+## MangaUpdates Integration (`mu.js`)
+
+`fetchMuInfo(name, force)` is the single entry point. It checks `muCache` first unless `force` is true. If not cached, it:
+
+1. Checks `muOverrides` for a title substitution
+2. Calls `muSearch()` (proxied through the Rust backend in Tauri) with up to 5 results
+3. Selects the best match by exact title equality, falling back to the first result
+4. Calls `muFetchSeries()` for the full record, since the search endpoint omits `authors` and `pub_status`
+5. Parses the response into a normalised info object: `{ id, title, url, description, image, thumb, year, status, genres, authors, rating, cachedAt }`
+6. Writes the result to `muCache` and calls `saveMuCache()`
+
+Both `muSearch()` and `muFetchSeries()` are wrapped in `_muThrottle()`, a promise-chain serialiser that ensures no two MU API calls are fired within 500ms of each other regardless of call origin. The chain resets to a fresh `Promise.resolve()` when the queue empties, tracked by a `_muQueueSize` counter, so the chain does not grow unbounded over a session.
+
+In browser dev mode, both functions hit a local proxy server on port 3005 rather than the Tauri backend. This proxy exists because the MangaUpdates API does not send CORS headers that permit direct browser requests.
+
+`applyMuInfoToPanel(info, series, updateCover)` writes fetched metadata to the series hero panel DOM: status inline in the stat row alongside year and rating, author, description, genre tags, and the MangaUpdates link.
+
+---
+
+## Reader
+
+### Chapter loading
+
+`openLocalChapter(idx)` clears the current chapter via `freePages()`, determines the page source (Tauri native, PDF, or FSAPI), builds `reader.pages`, resolves the start page from saved progress, preloads the first four pages via `preloadLocal()`, runs `applyAutoLayout()` to detect webtoon format, then renders.
+
+### Page sources
+
+- **Tauri image chapters** — `convertFileSrc(path)` transforms disk paths to asset protocol URLs. These are assigned at chapter-open time. No IPC or blob creation per page.
+- **PDF chapters (Tauri)** — `pdfjsLib.getDocument(assetUrl)` opens the document. Pages are rendered on demand in `preloadPdfPage()`: `pdfDoc.getPage(n)` → `pdfPage.render()` to an off-screen canvas → `canvas.toBlob()` → `URL.createObjectURL()`. Render height is fixed at 1200px.
+- **FSAPI image chapters** — `FileHandle.getFile()` → `URL.createObjectURL()`. Blob URLs are revoked when the chapter closes.
+
+### Memory management
+
+`freePages()` iterates `reader.pages`, revokes all blob URLs where `revoke: true`, and calls `pdfDoc.destroy()` on each unique PDF document object (deduplicated via `Set`). This runs at chapter-open and when navigating away from the reader.
+
+`_evictPdfPages(curIdx)` is called on every page turn and strip scroll update. It revokes blob URLs for rendered PDF pages more than 2 positions from `curIdx` and resets their `url` to null so they can be re-rendered if revisited. This keeps a maximum of 5 decoded PDF page bitmaps in memory simultaneously.
+
+### Long strip mode
+
+`renderStrip()` creates DOM nodes for all pages but only sets `img.src` immediately for pages within ±5 of `curPage`. All other pages are registered with an `IntersectionObserver` (`rootMargin: 200% 0px`) that fires `preloadLocal()` as they scroll into proximity. The observer is stored in `_stripObserver` and disconnected in `_disconnectStripScroll()` on every navigation or re-render.
+
+A `rAF`-throttled scroll listener keeps `reader.curPage` in sync with the visible page and calls `_evictPdfPages` on each update.
+
+### Preload buffer sizes
+
+| Mode | Pages ahead | Pages behind |
+|------|-------------|--------------|
+| Long strip | ±5 from curPage (IntersectionObserver) | — |
+| Single page | 4 | 2 |
+| Spread | 4 | 2 |
+
+### Auto-layout detection
+
+`detectLongStrip()` samples up to three already-loaded pages, measures their natural `height / width` ratio via `Image()`, and returns true if the average exceeds 2.5. Standard manga pages run 1.3–1.8; webtoon strips are typically 3–20. The result is applied per-chapter without overwriting the user's saved layout preference.
+
+---
+
+## Rust Command Surface
+
+| Command | Description |
+|---------|-------------|
+| `read_dir` | Returns directory entries with name, path, is_dir |
+| `set_library_root` | Sets the validated library root in Rust state |
+| `clear_library_root` | Clears Rust-side library root on library change |
+| `load_library_path` | Reads legacy library path from file (migration) |
+| `get_series_size` | Recursively sums folder size in bytes |
+| `count_pdf_pages` | Returns page count for a PDF file |
+| `pick_folder` | Opens a native folder picker dialog |
+| `pick_image_file` | Opens a native image file picker |
+| `start_library_watcher` | Begins watching the library root; fires `library-changed` events |
+| `cache_cover` | Downloads a cover URL to the app cache dir; returns the local path |
+| `cache_custom_cover` | Copies a local image file to the cover cache |
+| `delete_cached_cover` | Removes a cached cover by series ID |
+| `open_folder_path` | Opens a folder in the system file explorer |
+| `open_url` | Opens a URL in the system default browser |
+| `search_mu` | Proxies a MangaUpdates search POST request |
+| `fetch_mu_series` | Proxies a MangaUpdates series GET request |
+| `get_app_version` | Returns the version from Cargo.toml at runtime |
+| `check_for_updates` | Queries the GitHub releases API and returns update metadata |
+| `download_and_install_update` | Downloads a platform installer and launches it |
+| `move_to_trash_folder` | Moves a series directory into `[library]/_trash` after path validation |
+
+The `search_mu` and `fetch_mu_series` commands exist because the MangaUpdates API does not send CORS headers that allow direct browser requests. All network calls to `api.mangaupdates.com` are proxied through Rust using `reqwest`.
+
+---
+
+## Theme Engine
+
+The theme engine (`settings.js`) derives all surface colours algorithmically from three inputs: `ink` (base dark colour), `accent`, and `paper` (base light colour). `deriveTheme()` computes eight surface steps by shifting lightness in HSL space, then writes all values as CSS custom properties on `:root` via `_applyVars()`. The depth, steps, and contrast parameters control how aggressively the surfaces are separated.
+
+Six built-in themes are defined as CSS class overrides (`body.theme-arctic`, etc.) that re-declare the same custom property set. Custom themes use inline styles on `:root` directly and are stored in `custom_themes.json`. Font overrides are stored separately in `theme_fonts.json` and applied per-theme on load.
+
+---
+
+## Update System (`update.js`)
+
+On launch, `getAppVersion()` resolves the running version from the Tauri backend. `checkForUpdates()` calls `invoke('check_for_updates', { currentVersion })` which performs a GitHub releases API query in Rust and returns a structured result: `{ hasUpdate, currentVersion, latestVersion, releaseUrl, downloadUrl, downloadFilename }`.
+
+If an update is available, `showUpdateBanner()` renders a notification bar. The "UPDATE NOW" button only appears when `downloadUrl` is non-empty — i.e. when the Rust backend found a platform-specific installer in the release assets. A "Download" link pointing to `RELEASES_URL` is always rendered as a fallback.
+
+`autoUpdate()` calls `invoke('download_and_install_update', ...)` and listens to `update-download-progress` Tauri events to drive a progress bar. On success it prompts the user to close the app to complete installation. On failure it shows the error inline alongside a retry button and the fallback download link.
+
+---
+
+## Navigation and View Management
+
+The application has four named views: `landing`, `library`, `chapters`, and `reader`. Only one is visible at a time. `show(id)` swaps the active `.view` element by toggling the `active` class, animating in the new view unless `ui.navBack` is set. `bc(view)` handles everything else that changes on navigation: the breadcrumb trail in the header, the nav-row path segments, the enabled state of back/forward/rescan buttons, and the right-side action area. It also sets `document.body.dataset.view` to the current view name so CSS can target view-specific overrides without JavaScript.
+
+`mobileBack()` pushes the current view onto `ui.navHistory` and navigates up one level. `mobileForward()` pops from `ui.navHistory` and navigates forward. The stack is cleared on any forward navigation to prevent stale forward destinations.
+
+The header breadcrumb strips leading zeros and reformats chapter names by parsing the volume and chapter numbers through `parseChapterKey()`, so a folder named `Vol.02 Ch.0006.5 - Some Title` is displayed as `Vol.2 Ch.6.5 Some Title`.
+
+Select mode is automatically exited when navigating away from the library view — `show()` checks `ui.selectMode` and clears all selection state if the destination is not `library`.
+
+---
+
+## Reading Progress
+
+Progress is stored in `readProgress`, a nested object keyed by `seriesKey` (`local:Series Name`) at the top level and `chapterName` at the second level. Each chapter entry holds: `page`, `total`, `read`, and `updatedAt`.
+
+`setChProg()` writes a chapter's current page and total, computing `read` automatically: a chapter is marked read when the reader reaches the first page in RTL mode (page index 0) or the last page in LTR mode (page index total - 1). Once `read` is set to true it is never unset by normal reading — only by `toggleChRead()`.
+
+`saveCurrentProgress()` is called on every page turn. It writes to the in-memory `readProgress` object synchronously, updates the card progress bar immediately, then debounces the actual disk write to 1000ms. This means storage is written at most once per second regardless of reading speed.
+
+`findContinueIdx()` determines which chapter and page to resume from. It first looks for a chapter that is in-progress (page > 0, not marked read), then falls back to the first unread chapter, then falls back to the last chapter if everything is read.
+
+`seriesReadStats()` counts chapters with `read: true` and returns a count and a ratio for driving the card progress bar and the hero panel progress display.
+
+---
+
+## Bookmarks
+
+Bookmarks are stored as a flat object in `bookmarks.json`, keyed by series key (`local:Series Name`). `isBookmarked(key)` is a direct property lookup. The bookmarks tab is a filter pass over `library.items` — no separate data structure. Toggling a bookmark re-renders the library immediately.
+
+---
+
+## Series Identification and MU Overrides
+
+Each series is matched to MangaUpdates by its folder name. When the automatic match is wrong, the identify modal allows searching MangaUpdates directly and selecting the correct entry.
+
+`applyMuOverride(rec)` stores `{ title, seriesId }` in `muOverrides`, keyed by the local folder name. On the next `fetchMuInfo()` call for that series, the stored title is used as the search query instead of the folder name. After applying an override, the old cached cover file is deleted via `invoke('delete_cached_cover', ...)`, the MU cache entry and cover index entry are cleared, and the series is immediately re-opened to trigger a fresh fetch.
+
+`clearMuOverride()` performs the same cache clearing and re-open without writing a new override entry.
+
+---
+
+## Custom Covers
+
+`invoke('pick_image_file')` opens a native file picker restricted to image types. The selected file is passed to `invoke('cache_custom_cover', { srcPath, seriesName })` which copies it into the app cover cache directory and returns the cached path. The path is written to `coverIndex[series.name]` with `{ cachedPath, custom: true }` — the `custom: true` flag prevents the MU cover queue from overwriting it. Resetting a custom cover deletes the cache entry, re-enqueues the series through `enqueueMuCover`, and updates the card and hero panel.
+
+---
+
+## Rescan
+
+`rescanLibrary()` is context-aware. It always starts with a single `read_dir` call on the library root to get the current folder list (excluding `_trash`). It builds a Map from the existing `library.items` for O(1) lookup, then builds a new array preserving existing series objects by reference wherever the folder name matches. New series have chapters loaded and are pushed to a `newEntries` list for cover loading. The `library.items` array is mutated in-place so references held by other parts of the code remain valid.
+
+After the library diff, behaviour splits on `ui.currentView`:
+
+- **Library view** — `renderLibrary()` is called and a toast shows the diff summary.
+- **Chapters or reader view** — the open series' chapter list is re-fetched from disk and the chapter list is re-rendered in place. If the currently open series was removed, the app falls back to the library view. If the view is `chapters`, `fetchMuInfo(name, true)` is additionally called with `force: true` to refresh MangaUpdates metadata for that series.
+
+---
+
+## File Watcher
+
+When a library is opened, `invoke('start_library_watcher', { path })` registers a Rust-side `notify` watcher on the library root. When new directories appear, the Rust backend fires a `library-changed` event. JavaScript receives this via `tauriListen` and sets a 1500ms debounce timer before calling `_loadLibraryFromPath()` again, which prevents multiple rapid events from triggering redundant scans. Toasts fired during the initial 2-second startup window are suppressed via a `_toastReady` flag to prevent false-positive messages on auto-reopen.
+
+---
+
+## Chapter Name Parsing
+
+`parseChapterKey(name)` extracts `[volume, chapter]` as numerics from a folder name. It handles the following formats via regex:
+
+- Volume: `Vol.02`, `Vol 2`, `Volume 02`, `Volume2`
+- Chapter: `Ch.0006.2`, `Ch 6.2`, `Chapter 006`, `Chapter6.5`
+- Fallback: first numeric run in the name
+
+The separator in decimal chapter numbers (`.` or `_`) is normalised before `parseFloat` so `Ch.0006_2` and `Ch.0006.2` both produce `6.2`. Volumes are parsed but not used for sorting — only chapter number determines order.
+
+`cleanChTitle()` strips the volume/chapter prefix, language tags in parentheses (`(en)`, `(jp)`, etc.), and group names in square brackets from a folder name to produce a human-readable title. `extractGroup()` returns just the group name from the trailing bracket.
+
+---
+
+## Library Sort
+
+`applySortToList(list)` sorts an array of series objects in-place according to `ui.libSort`. Volume count is computed by `getVolumeCount(s)`, which iterates `s.chapters`, parses each chapter name with `parseChapterKey`, collects distinct non-zero volume numbers into a `Set`, and returns the count (falling back to 1 if chapters exist but carry no volume prefix). Size comparisons treat `null` as 0. All non-alphabetical sorts use `natCmp` as a tiebreaker.
+
+The sort is applied inside `renderLibrary()` on a shallow copy of the filtered list so `library.items` order is never mutated. Sort preference is persisted to `settings.json` via `patchSettings` and restored in `_loadLibraryFromPath()` before the first render.
+
+---
+
+## Multi-Select and Trash
+
+Select mode is toggled by `toggleSelectMode()`, which sets `ui.selectMode`, adds `body.select-active` (used by CSS to dim unselected cards), and re-renders the library. While active, card `onclick` handlers call `toggleSeriesSelect(name)` instead of `openSeries()`. `toggleSeriesSelect` updates `ui.selectedSeries` (a `Set`) and toggles the `.selected` class on the affected card directly without a full re-render.
+
+The trash action bar is a `position: sticky; bottom: 0` element inside `#view-library`, visible only when `ui.selectMode` is true.
+
+`moveSelectedToTrash()` iterates `ui.selectedSeries` and calls `invoke('move_to_trash_folder', { seriesPath, libraryPath })` for each. The Rust command canonicalises both paths and verifies the series is inside the library root before calling `std::fs::rename`. On success the series is removed from `library.items` in JavaScript. After all moves, `toggleSelectMode()` is called to exit select mode and re-render.
+
+The `_trash` folder is excluded from `library.items` at every entry point: FSAPI load, Tauri load, and rescan.
+
+---
+
+## Known Constraints
+
+**No ES modules.** All code shares a single global scope. Function and variable names must be unique across all files. This is a deliberate trade-off to avoid a build step.
+
+**No browser PDF cover caching.** `cache_cover` and `cache_custom_cover` are Tauri-only commands. In browser mode, cover images are fetched directly from MangaUpdates URLs with no local caching.
+
+**FSAPI limitations.** In browser mode, directory handles must be re-requested on each session — the app cannot auto-reopen the library. There is no size computation, no file watcher, and no update checking. Multi-select and trash are disabled since `move_to_trash_folder` is Tauri-only.
+
+**MU search quality.** The automatic match selects the first result whose title exactly matches the folder name (case-insensitive), falling back to the top result. Series with names that differ significantly from their MangaUpdates titles will match incorrectly and require a manual override via the identify modal.
+
+**PDF.js memory floor.** Each rendered PDF page is a JPEG blob created from a canvas. The minimum practical memory for a PDF chapter is approximately 5 decoded pages at 45 MB per page at 1200px render height. This is a PDF.js architectural constraint, not an application one.
+
+**Single-window only.** There is no multi-window support. Opening a second chapter always replaces the current reader state.
