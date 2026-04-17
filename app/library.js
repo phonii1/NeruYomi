@@ -76,17 +76,19 @@ async function _loadLibraryFromPath(folderPath) {
 
 async function getChaptersTauri(seriesPath) {
   const entries = await invoke('read_dir', { path: seriesPath });
-  const dirs = [], pdfs = [];
+  const chapters = [];
   for (const e of entries) {
-    if (e.is_dir) dirs.push(e);
-    else if (e.name.toLowerCase().endsWith('.pdf')) pdfs.push(e);
+    const lo = e.name.toLowerCase();
+    if (e.is_dir) {
+      chapters.push({ name: e.name, path: e.path, isPdf: false });
+    } else if (lo.endsWith('.pdf')) {
+      chapters.push({ name: e.name.replace(/\.pdf$/i, ''), path: e.path, isPdf: true, pdfPath: e.path });
+    } else if (lo.endsWith('.cbz')) {
+      chapters.push({ name: e.name.replace(/\.cbz$/i, ''), path: e.path, isCbz: true, cbzPath: e.path });
+    }
   }
-  dirs.sort((a, b) => chapterCmp(a.name, b.name));
-  pdfs.sort((a, b) => chapterCmp(a.name, b.name));
-  return [
-    ...dirs.map(d => ({ name: d.name, path: d.path, isPdf: false })),
-    ...pdfs.map(f => ({ name: f.name.replace(/\.pdf$/i, ''), path: f.path, isPdf: true, pdfPath: f.path })),
-  ];
+  chapters.sort((a, b) => chapterCmp(a.name, b.name));
+  return chapters;
 }
 
 async function loadCoverTauri(series) {
@@ -109,6 +111,15 @@ async function loadCoverTauri(series) {
   const ch = series.chapters[0];
   const localFallback = async () => {
     try {
+      if (ch.isCbz && ch.cbzPath) {
+        const cbzEntries = await invoke('read_cbz_entries', { path: ch.cbzPath });
+        if (!cbzEntries.length || !library.items.includes(series)) return;
+        const b64 = await invoke('read_cbz_entry', { path: ch.cbzPath, name: cbzEntries[0] });
+        setCoverUrl(series, _base64ToUrl(b64, _imgMimeType(cbzEntries[0])));
+        const card = getSeriesCard(series.name);
+        if (card) { rebuildCoverEl(card, 'local:'+series.name, series, 'local'); }
+        return;
+      }
       const entries = await invoke('read_dir', { path: ch.path });
       if (!library.items.includes(series)) return; // library replaced while awaiting
       const imgs = entries
@@ -899,6 +910,66 @@ function _updateHeroBg(coverUrl) {
 }
 
 // Local series → chapter list
+/**
+ * Inspects CBZ and PDF chapters in a series and, when pagesPerChapter > 0,
+ * replaces flat single-file chapters with an array of virtual page-range
+ * chapters. Mutates series.chapters in place. Safe to call multiple times —
+ * already-expanded chapters (those with a _virtual flag) are skipped.
+ */
+async function _expandVirtualChapters(series) {
+  const ppc = userSettings.pagesPerChapter;
+  if (!ppc || ppc <= 0) return;
+
+  const expanded = [];
+  for (const ch of series.chapters) {
+    if (ch._virtual) { expanded.push(ch); continue; } // already split
+
+    if (ch.isCbz && ch.cbzPath) {
+      let entries;
+      try { entries = await invoke('read_cbz_entries', { path: ch.cbzPath }); }
+      catch(e) { expanded.push(ch); continue; }
+
+      // Only split if flat (no subfolder separators in entry names)
+      const isFlat = entries.every(e => !e.includes('/') || e.split('/').length <= 2);
+      if (!isFlat || entries.length <= ppc) { expanded.push(ch); continue; }
+
+      for (let i = 0; i < entries.length; i += ppc) {
+        const slice = entries.slice(i, i + ppc);
+        const start = i + 1, end = Math.min(i + ppc, entries.length);
+        expanded.push({
+          name:       `${ch.name} — p.${start}–${end}`,
+          isCbz:      true,
+          cbzPath:    ch.cbzPath,
+          cbzEntries: slice,
+          _virtual:   true,
+        });
+      }
+    } else if (ch.isPdf && ch.pdfPath) {
+      let total;
+      try { total = await invoke('count_pdf_pages', { path: ch.pdfPath }); }
+      catch(e) { expanded.push(ch); continue; }
+
+      if (total <= ppc) { expanded.push(ch); continue; }
+
+      for (let i = 0; i < total; i += ppc) {
+        const startPage = i + 1;
+        const endPage   = Math.min(i + ppc, total);
+        expanded.push({
+          name:         `${ch.name} — p.${startPage}–${endPage}`,
+          isPdf:        true,
+          pdfPath:      ch.pdfPath,
+          pdfStartPage: startPage,
+          pdfEndPage:   endPage,
+          _virtual:     true,
+        });
+      }
+    } else {
+      expanded.push(ch);
+    }
+  }
+  series.chapters = expanded;
+}
+
 async function openSeries(series) {
   // Forward navigation — any accumulated back/forward history is now stale.
   ui.navHistory.length = 0;
@@ -961,6 +1032,145 @@ function toggleChSort() {
 }
 
 /** Renders the chapter list with volume group headers */
+// ─── Chapter split ──────────────────────────────────────────────────────────
+
+let _splitTarget = null; // { series, ch, chIdx, isPdf, totalPages }
+
+/**
+ * Opens the split modal. For PDFs, fetches the total page count and shows
+ * the range editor. For CBZ, shows the pages-per-chapter input.
+ */
+async function openSplitModal(series, ch, chIdx) {
+  _splitTarget = { series, ch, chIdx };
+  $('split-ch-name').textContent = ch.name;
+
+  if (ch.isPdf && ch.pdfPath) {
+    let total = 0;
+    try { total = await invoke('count_pdf_pages', { path: ch.pdfPath }); } catch(e) {}
+    _splitTarget.totalPages = total;
+    $('split-ch-total').textContent = total ? `${total} pages total` : '— pages total';
+    _renderRangeRows([{ name: 'Chapter 1', start: 1, end: total || '' }], 'p.');
+  } else if (ch.isCbz && ch.cbzPath) {
+    // CBZ: fetch entries, use entry indices as the range unit
+    let entries = [];
+    try { entries = await invoke('read_cbz_entries', { path: ch.cbzPath }); } catch(e) {}
+    _splitTarget.cbzEntries = entries;
+    $('split-ch-total').textContent = entries.length ? `${entries.length} images total` : '— images total';
+    _renderRangeRows([{ name: 'Chapter 1', start: 1, end: entries.length || '' }], 'img.');
+  }
+
+  $('split-pdf-panel').style.display = '';
+  $('split-ch-modal').classList.add('open');
+}
+
+function closeSplitModal() {
+  $('split-ch-modal').classList.remove('open');
+  _splitTarget = null;
+}
+
+/** Renders the list of range input rows inside the PDF panel.
+ * label — unit label shown between the inputs (e.g. "p." or "img.")
+ */
+function _renderRangeRows(rows, label = "p.") {
+  $("split-range-unit-lbl").textContent = label;
+  const list = $('split-ranges-list');
+  list.innerHTML = '';
+  rows.forEach((r, idx) => {
+    const card = document.createElement('div');
+    card.className = 'split-range-card';
+    card.dataset.idx = idx;
+    card.innerHTML =
+      `<input class="modal-input split-range-name" type="text" placeholder="Chapter name…" value="${esc(r.name || '')}">`+
+      `<div class="split-range-fields">`+
+        `<span class="split-range-unit">${label}</span>`+
+        `<span class="split-range-lbl">START</span>`+
+        `<input class="modal-input split-range-num" type="number" min="1" placeholder="1" value="${r.start || ''}">`+
+        `<span class="split-range-sep">→</span>`+
+        `<span class="split-range-lbl">END</span>`+
+        `<input class="modal-input split-range-num" type="number" min="1" placeholder="—" value="${r.end || ''}">`+
+      `</div>`+
+      `<button class="split-range-del" title="Remove">✕</button>`;
+    card.querySelector('.split-range-del').addEventListener('click', () => {
+      card.remove();
+    });
+    list.appendChild(card);
+  });
+}
+
+/** Reads current row values from the range editor. */
+function _readRangeRows() {
+  return [...$('split-ranges-list').querySelectorAll('.split-range-card')].map(row => ({
+    name:  row.querySelector('.split-range-name').value.trim(),
+    start: parseInt(row.querySelectorAll('input[type=number]')[0].value),
+    end:   parseInt(row.querySelectorAll('input[type=number]')[1].value),
+  }));
+}
+
+/** Adds a blank row to the range editor, pre-filling start from the last row's end+1. */
+function _addRangeRow() {
+  const rows = _readRangeRows();
+  const lastEnd = rows.length ? (rows[rows.length - 1].end || 0) : 0;
+  // totalPages for PDF, cbzEntries.length for CBZ
+  const total = _splitTarget?.totalPages || _splitTarget?.cbzEntries?.length || '';
+  const currentLabel = $('split-range-unit-lbl')?.textContent || 'p.';
+  _renderRangeRows([...rows, {
+    name:  `Chapter ${rows.length + 1}`,
+    start: lastEnd + 1,
+    end:   total,
+  }], currentLabel);
+  // Scroll to bottom and focus the new name field
+  const list = $('split-ranges-list');
+  list.scrollTop = list.scrollHeight;
+  list.querySelector('.split-range-card:last-child .split-range-name')?.focus();
+}
+
+async function confirmSplit() {
+  if (!_splitTarget) return;
+  const { series, ch, chIdx } = _splitTarget;
+
+  const rows = _readRangeRows();
+  if (!rows.length) return;
+  const invalid = rows.some(r => !r.name || isNaN(r.start) || isNaN(r.end) || r.start < 1 || r.end < r.start);
+  if (invalid) {
+    $('split-ranges-list').querySelectorAll('.split-range-card').forEach((row, i) => {
+      const r = rows[i];
+      if (!r.name || isNaN(r.start) || isNaN(r.end) || r.start < 1 || r.end < r.start)
+        row.style.outline = '1px solid var(--status-error)';
+    });
+    return;
+  }
+  closeSplitModal();
+
+  let virtual = [];
+  if (ch.isPdf && ch.pdfPath) {
+    virtual = rows.map(r => ({
+      name:         r.name,
+      isPdf:        true,
+      pdfPath:      ch.pdfPath,
+      pdfStartPage: r.start,
+      pdfEndPage:   r.end,
+      _virtual:     true,
+      _parentName:  ch.name,
+    }));
+  } else if (ch.isCbz && ch.cbzPath) {
+    const entries = _splitTarget.cbzEntries || [];
+    virtual = rows.map(r => ({
+      name:        r.name,
+      isCbz:       true,
+      cbzPath:     ch.cbzPath,
+      cbzEntries:  entries.slice(r.start - 1, r.end),
+      _virtual:    true,
+      _parentName: ch.name,
+    }));
+  }
+
+  if (!virtual.length) return;
+  series.chapters.splice(chIdx, 1, ...virtual);
+  renderChapterList(series, 'local:' + series.name);
+}
+
+
+
 function renderChapterList(series, sKey) {
   const list = $('ch-list'); list.innerHTML = '';
   if (!series.chapters.length) {
@@ -1056,11 +1266,14 @@ function renderChapterList(series, sKey) {
           ${isRead ? `<span class="ch-read-badge read-done">✓ read</span>` : ''}
           <span class="ch-read-dot"></span>
           <button class="ch-mark-btn" title="Toggle read">${isRead ? '✓' : '○'}</button>
+          ${(ch.isCbz || ch.isPdf) && !ch._virtual ? `<button class="ch-dots-btn" title="Split into chapters">⋯</button>` : ''}
           <span class="ch-arr">▶</span>
         </div>`;
 
       const markBtn = item.querySelector('.ch-mark-btn');
       markBtn.onclick = e => { e.stopPropagation(); toggleChRead(sKey, ch.name, ch._pageCount ?? null, markBtn); };
+      const dotsBtn = item.querySelector('.ch-dots-btn');
+      if (dotsBtn) dotsBtn.onclick = e => { e.stopPropagation(); openSplitModal(series, ch, i); };
       item.onclick = () => openLocalChapter(i);
       group.appendChild(item);
       // Capture the span directly — avoids a stale id lookup if the list is
@@ -1082,6 +1295,11 @@ async function countPages(ch) {
       const ab = await file.arrayBuffer();
       const doc = await pdfjsLib.getDocument({ data: ab }).promise;
       n = doc.numPages;
+    } catch(e) { n = 0; }
+  } else if (IS_TAURI && ch.isCbz && ch.cbzPath) {
+    try {
+      const cbzPages = await invoke('read_cbz_entries', { path: ch.cbzPath });
+      n = cbzPages.length;
     } catch(e) { n = 0; }
   } else if (IS_TAURI && ch.isPdf && ch.pdfPath) {
     try {

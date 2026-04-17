@@ -442,6 +442,21 @@ body.select-active .series-card:not(.selected) { opacity: 0.6; }
 
 /* Play arrow — muted, brightens on row hover */
 .ch-arr { color: var(--ch-arr-color); font-size: 10px; flex-shrink: 0; transition: color 0.12s; }
+.ch-dots-btn { background: transparent; border: none; color: var(--text-faint); font-size: 14px; cursor: pointer; padding: 1px 4px; line-height: 1; border-radius: 3px; letter-spacing: 2px; flex-shrink: 0; }
+.ch-dots-btn:hover { color: var(--accent); }
+/* Split chapter range rows — two-line card layout */
+.split-range-card { background:var(--surface-deep); border:1px solid var(--border-color); border-radius:var(--r); padding:10px 12px; position:relative; }
+.split-range-card + .split-range-card { margin-top:6px; }
+.split-range-name { width:100%; margin-bottom:8px; }
+.split-range-fields { display:flex; align-items:center; gap:8px; }
+.split-range-lbl { font-family:var(--f-hdr);font-size:9px;color:var(--text-dim);letter-spacing:0.5px;flex-shrink:0;text-transform:uppercase; }
+.split-range-num { width:72px !important; flex-shrink:0; text-align:center; }
+.split-range-sep { font-family:var(--f-hdr);font-size:11px;color:var(--text-faint);flex-shrink:0; }
+.split-range-unit { font-family:var(--f-hdr);font-size:9px;color:var(--accent);letter-spacing:0.5px;flex-shrink:0;margin-right:2px; }
+.split-range-del { position:absolute;top:8px;right:8px;background:transparent;border:none;color:var(--text-faint);cursor:pointer;font-size:11px;padding:2px 5px;border-radius:3px;line-height:1; }
+.split-range-del:hover { color:var(--status-error);background:var(--surface-hover); }
+.split-add-btn { width:100%;margin-top:8px;background:transparent;border:1px dashed var(--border-color);color:var(--text-dim);font-family:var(--f-hdr);font-size:10px;letter-spacing:0.5px;padding:7px;border-radius:var(--r);cursor:pointer;transition:all 0.13s; }
+.split-add-btn:hover { border-color:var(--accent);color:var(--accent); }
 .ch-item:hover .ch-arr, .ch-item:active .ch-arr { color: var(--accent-hover); }
 
 /* ── READER ── */
@@ -1304,6 +1319,17 @@ input[type="range"].ct-range { width: 100%; height: 3px; accent-color: var(--acc
   </div>
 
   <div class="settings-group">
+    <div class="settings-label">MangaUpdates Cache</div>
+    <div class="settings-option" style="flex-direction:column;align-items:flex-start;gap:6px;padding:10px 8px">
+      <div id="mu-cache-stats" style="font-family:var(--f-hdr);font-weight:700;font-size:10px;color:var(--text-dim);letter-spacing:0.5px">—</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn" id="mu-cache-refresh-btn" style="font-size:10px;padding:5px 10px">↻ REFRESH ALL</button>
+        <button class="btn" id="mu-cache-clear-btn" style="font-size:10px;padding:5px 10px">✕ CLEAR CACHE</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-group">
     <div class="settings-label">Updates</div>
     <div class="settings-option" style="flex-direction:column;align-items:flex-start;gap:6px;padding:10px 8px">
       <div id="update-status" style="font-family:var(--f-hdr);font-weight:700;font-size:10px;color:var(--text-dim);letter-spacing:0.5px">v0.49.0B</div>
@@ -1343,6 +1369,31 @@ input[type="range"].ct-range { width: 100%; height: 3px; accent-color: var(--acc
 </div>
 
 </div>
+<!-- Split Chapter Modal -->
+<div id="split-ch-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:440px;max-height:85vh;display:flex;flex-direction:column">
+    <div class="modal-head">
+      <div class="modal-title">SPLIT INTO CHAPTERS</div>
+      <div class="modal-sub" id="split-ch-name" style="margin-top:3px">—</div>
+    </div>
+
+    <div id="split-pdf-panel" style="display:none;padding:12px 14px 0;flex:1;overflow:hidden;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:10px;flex-shrink:0">
+        <span style="font-family:var(--f-hdr);font-size:10px;color:var(--text-dim);letter-spacing:0.5px">CHAPTER RANGES</span>
+        <span style="font-family:var(--f-hdr);font-size:10px;color:var(--accent)" id="split-ch-total">— total</span>
+        <span style="font-family:var(--f-hdr);font-size:9px;color:var(--text-faint)" id="split-range-unit-lbl">p.</span>
+      </div>
+      <div id="split-ranges-list" style="overflow-y:auto;flex:1;padding-right:4px;scrollbar-width:thin;scrollbar-color:var(--accent) var(--surface-deep)"></div>
+      <button class="split-add-btn" id="split-add-range-btn" style="flex-shrink:0">+ ADD CHAPTER</button>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn" id="split-ch-cancel">CANCEL</button>
+      <button class="btn primary" id="split-ch-confirm" style="margin-left:auto">SPLIT</button>
+    </div>
+  </div>
+</div>
+
 <script src="utils.js"></script>
 <script src="store.js"></script>
 <script src="settings.js"></script>

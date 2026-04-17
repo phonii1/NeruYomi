@@ -327,7 +327,7 @@ function _showFontPicker(slot, fonts) {
           <button id="font-pick-close" class="nav-icon-btn" style="color:var(--text-muted)">${ICON.dots}</button>
         </div>
         <div class="modal-search-row">
-          <input type="text" class="modal-input" id="font-pick-search" placeholder="Search fonts…" oninput="_filterFontList()" autocomplete="off" spellcheck="false">
+          <input type="text" class="modal-input" id="font-pick-search" placeholder="Search fonts…" autocomplete="off" spellcheck="false">
           <button id="font-pick-file-btn" class="btn" style="font-size:10px;padding:4px 10px">FROM FILE</button>
         </div>
         <div class="modal-body" id="font-pick-list" style="padding:0"></div>
@@ -339,6 +339,7 @@ function _showFontPicker(slot, fonts) {
     document.body.appendChild(modal);
     document.getElementById('font-pick-close').addEventListener('click', () => modal.classList.remove('open'));
     document.getElementById('font-pick-file-btn').addEventListener('click', _fontPickFromFile);
+    document.getElementById('font-pick-search').addEventListener('input', _filterFontList);
   }
 
   modal.dataset.slot = slot;

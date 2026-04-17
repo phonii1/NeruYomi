@@ -196,6 +196,17 @@ function _wireEvents() {
     r.addEventListener('change', function() { setSetting('density', this.value); }));
 
   // ── Settings: updates ────────────────────────────────────────
+  // ── Settings: MangaUpdates cache ─────────────────────────────
+  // ── Split chapter modal ─────────────────────────────────────
+  $('split-ch-modal').addEventListener('click', closeSplitModal);
+  $('split-ch-modal').querySelector('.modal-box').addEventListener('click', e => e.stopPropagation());
+  $('split-ch-cancel').addEventListener('click', closeSplitModal);
+  $('split-ch-confirm').addEventListener('click', confirmSplit);
+  $('split-add-range-btn').addEventListener('click', _addRangeRow);
+
+  $('mu-cache-refresh-btn')?.addEventListener('click', refreshAllMuCache);
+  $('mu-cache-clear-btn')?.addEventListener('click', clearAllMuCache);
+
   $('check-updates-btn').addEventListener('click', manualCheckUpdate);
 
   // ── Card context menu ────────────────────────────────────────

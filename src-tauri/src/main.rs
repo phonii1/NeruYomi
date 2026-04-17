@@ -877,20 +877,75 @@ async fn write_data_file(app: AppHandle, filename: String, content: String) -> R
 // ═══════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════
-// DEVTOOLS TOGGLE
-// Invoked from JS on F12 / Ctrl+Shift+I. Requires the "devtools"
-// feature in Cargo.toml: tauri = { features = ["devtools", ...] }
+// CBZ SUPPORT
+// CBZ files are ZIP archives containing image pages.
+// read_cbz_entries — returns a sorted list of image entry paths.
+// read_cbz_entry   — decodes one entry and returns it as base64
+//                    so the JS side can create a blob URL without
+//                    extracting anything to disk.
 // ═══════════════════════════════════════════════════════════════
 
+const CBZ_IMG_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "avif", "bmp"];
+
+fn is_cbz_image(name: &str) -> bool {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    CBZ_IMG_EXTS.contains(&ext.as_str())
+}
+
+/// Returns a sorted list of image entry names found inside the CBZ.
+/// Entry names preserve any subdirectory prefix so read_cbz_entry can
+/// locate them; sorting is by basename only so directory names don't
+/// affect chapter order.
 #[command]
-fn toggle_devtools(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        if win.is_devtools_open() {
-            win.close_devtools();
-        } else {
-            win.open_devtools();
-        }
-    }
+async fn read_cbz_entries(app: AppHandle, path: String) -> Result<Vec<String>, String> {
+    check_library_path(&app, &path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = fs::File::open(&path).map_err(|e| format!("open({path}): {e}"))?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("zip error: {e}"))?;
+        let mut names: Vec<String> = (0..zip.len())
+            .filter_map(|i| {
+                let entry = zip.by_index(i).ok()?;
+                if entry.is_file() && is_cbz_image(entry.name()) {
+                    Some(entry.name().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Sort by basename so subdirectory prefixes don't affect page order
+        names.sort_by(|a, b| {
+            let ba = a.rsplit('/').next().unwrap_or(a);
+            let bb = b.rsplit('/').next().unwrap_or(b);
+            ba.cmp(bb)
+        });
+        Ok(names)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Reads a single entry from the CBZ and returns its raw bytes as a
+/// base64 string. The JS side converts this to a blob URL — no temp
+/// files are written to disk.
+#[command]
+async fn read_cbz_entry(
+    app: AppHandle,
+    path: String,
+    name: String,
+) -> Result<String, String> {
+    check_library_path(&app, &path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Read;
+        use base64::{Engine as _, engine::general_purpose};
+        let file = fs::File::open(&path).map_err(|e| format!("open({path}): {e}"))?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("zip error: {e}"))?;
+        let mut entry = zip.by_name(&name).map_err(|e| format!("entry '{name}': {e}"))?;
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        Ok(general_purpose::STANDARD.encode(&bytes))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn main() {
@@ -911,6 +966,15 @@ fn main() {
         .manage(WatcherState(Mutex::new(None)))
         .manage(LibraryRoot(Mutex::new(None)))
         .manage(http_client)
+        // ── Auto-open DevTools in debug builds (tauri dev) ───────────
+        // In release builds DevTools are toggled via F12 / Ctrl+Shift+I.
+        .setup(|app| {
+            #[cfg(debug_assertions)]
+            if let Some(win) = app.get_webview_window("main") {
+                win.open_devtools();
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // MangaUpdates
             search_mu,
@@ -926,6 +990,8 @@ fn main() {
             pick_folder,
             read_dir,
             count_pdf_pages,
+            read_cbz_entries,
+            read_cbz_entry,
             get_series_size,
             // Cover image cache
             cache_cover,
@@ -942,8 +1008,6 @@ fn main() {
             // Shell
             open_url,
             open_folder_path,
-            // DevTools toggle
-            toggle_devtools,
             // Library watcher
             start_library_watcher,
             stop_library_watcher,

@@ -19,19 +19,40 @@ function updateMuCacheStats() {
 
 /** Re-fetch MU data for every cached series (runs sequentially to avoid hammering the API). */
 async function refreshAllMuCache() {
-  const keys = Object.keys(muCache);
+  // Use cached keys if available, otherwise fall back to all library series
+  // so the button works even after a full cache clear.
+  const cachedKeys = Object.keys(muCache);
+  const keys = cachedKeys.length
+    ? cachedKeys
+    : library.items.map(s => s.name);
   const btn = document.getElementById('mu-cache-refresh-btn');
   if (!keys.length) {
-    if (btn) { const orig=btn.textContent; btn.textContent='NOTHING TO REFRESH'; setTimeout(()=>btn.textContent=orig,2000); }
+    if (btn) { const orig = btn.textContent; btn.textContent = 'NO SERIES IN LIBRARY'; setTimeout(() => btn.textContent = orig, 2000); }
     return;
   }
   if (btn) { btn.disabled = true; btn.textContent = '↻ REFRESHING…'; }
+  // Step 1: re-fetch metadata for every cached series
   for (const name of keys) {
     await fetchMuInfo(name, true); // force=true bypasses cache
     await new Promise(r => setTimeout(r, 200)); // gentle throttle
   }
-  // Clear muInfo on all loaded series so detail views re-render
+
+  // Step 2: delete cached cover files and clear coverIndex so cache_cover
+  // re-downloads at full resolution instead of serving the old thumbnail.
+  for (const name of keys) {
+    if (coverIndex[name]?.custom) continue; // never touch custom covers
+    const info = muCache[name];
+    if (info?.id && IS_TAURI) {
+      await invoke('delete_cached_cover', { seriesId: String(info.id) }).catch(() => {});
+    }
+    delete coverIndex[name];
+  }
+  saveCoverIndex();
+
+  // Step 3: re-fetch covers and re-render series detail views
   library.items.forEach(s => { s.muInfo = null; });
+  library.items.forEach(loadCoverTauri);
+
   if (btn) { btn.disabled = false; btn.textContent = '↻ REFRESH ALL'; }
   updateMuCacheStats();
 }
@@ -39,8 +60,7 @@ async function refreshAllMuCache() {
 /** Wipes the entire MU metadata cache. */
 function clearAllMuCache() {
   const btn = document.getElementById('mu-cache-clear-btn');
-  if (!btn) return;
-  if (btn.dataset.confirming !== 'true') {
+  if (btn && btn.dataset.confirming !== 'true') {
     btn.dataset.confirming = 'true';
     const orig = btn.textContent;
     btn.textContent = 'CONFIRM? TAP AGAIN';
@@ -54,8 +74,7 @@ function clearAllMuCache() {
     }, 3000);
     return;
   }
-  btn.dataset.confirming = 'false';
-  btn.style.borderColor = ''; btn.style.color = '';
+  if (btn) { btn.dataset.confirming = 'false'; btn.style.borderColor = ''; btn.style.color = ''; }
   Object.keys(muCache).forEach(k => delete muCache[k]);
   saveMuCache();
   library.items.forEach(s => { s.muInfo = null; });
@@ -316,8 +335,8 @@ async function _applyCover(s, fallback) {
   if (coverIndex[s.name]?.custom) return;
 
   const info = await fetchMuInfo(s.name);
-  if (info?.thumb || info?.image) {
-    const rawUrl = info.thumb || info.image;
+  if (info?.image || info?.thumb) {
+    const rawUrl = info.image || info.thumb;
     if (IS_TAURI && info.id) {
       try {
         const cachedPath = await invoke('cache_cover', {

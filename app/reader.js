@@ -33,7 +33,10 @@ async function openLocalChapter(idx, startAtEnd=false) {
         const pdfUrl = convertFileSrc(ch.pdfPath);
         const doc = await pdfjsLib.getDocument(pdfUrl).promise;
         const arr = [];
-        for (let i = 1; i <= doc.numPages; i++)
+        // Virtual chapters specify a page range; full chapters use all pages
+        const startPage = ch.pdfStartPage ?? 1;
+        const endPage   = ch.pdfEndPage   ?? doc.numPages;
+        for (let i = startPage; i <= endPage; i++)
           arr.push({ name: `Page ${i}`, url: null, revoke: true, pdfDoc: doc, pdfPageNum: i });
         reader.pages = arr;
       } else {
@@ -42,6 +45,21 @@ async function openLocalChapter(idx, startAtEnd=false) {
       }
     } catch(e) {
       $('page-display').innerHTML=`<div class="empty"><div class="ei">⚠</div>FAILED TO LOAD PDF</div>`;
+      return;
+    }
+  } else if (IS_TAURI && ch.isCbz && ch.cbzPath) {
+    // CBZ chapter — use pre-set entries for virtual chapters, else fetch from archive
+    try {
+      const cbzEntries = ch.cbzEntries || await invoke('read_cbz_entries', { path: ch.cbzPath });
+      reader.pages = cbzEntries.map(name => ({
+        name:      name.split('/').pop(),
+        cbzPath:   ch.cbzPath,
+        entryName: name,
+        url:       null,
+        revoke:    true,
+      }));
+    } catch(e) {
+      $('page-display').innerHTML = `<div class="empty"><div class="ei">⚠</div>FAILED TO READ CBZ</div>`;
       return;
     }
   } else if (IS_TAURI && ch.path) {
@@ -88,6 +106,11 @@ async function preloadLocal(idxs) {
       // Asset URL was assigned at chapter-open time — nothing to load here.
       // This path is only reached if something cleared pages[i].url unexpectedly.
       reader.pages[i].url = convertFileSrc(reader.pages[i].filePath);
+    } else if (IS_TAURI && reader.pages[i].cbzPath) {
+      // CBZ page: decode from archive on demand, create blob URL
+      const p = reader.pages[i];
+      const b64 = await invoke('read_cbz_entry', { path: p.cbzPath, name: p.entryName });
+      reader.pages[i].url = _base64ToUrl(b64, _imgMimeType(p.entryName));
     } else if (reader.pages[i].handle) {
       const f=await reader.pages[i].handle.getFile();
       reader.pages[i].url=URL.createObjectURL(f);

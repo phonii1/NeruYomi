@@ -17,3 +17,5 @@ serde_json         = "1"
 # reqwest handles the MU API calls. "json" feature deserialises directly to Value.
 reqwest            = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tokio              = { version = "1", features = ["full"] }
+zip                = { version = "2", default-features = false, features = ["deflate"] }
+base64             = "0.22"

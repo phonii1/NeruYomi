@@ -120,6 +120,22 @@ const ZSTEP = 0.15, ZMIN = 0.3, ZMAX = 3;
 const IMG_EXT = new Set(['jpg','jpeg','png','webp','gif','avif','bmp','svg','tif','tiff']);
 const isImg  = n => { const i = n.lastIndexOf('.'); return i !== -1 && IMG_EXT.has(n.slice(i + 1).toLowerCase()); };
 const isPdf  = n => { const i = n.lastIndexOf('.'); return i !== -1 && n.slice(i + 1).toLowerCase() === 'pdf'; };
+const isCbz  = n => { const i = n.lastIndexOf('.'); return i !== -1 && n.slice(i + 1).toLowerCase() === 'cbz'; };
+
+/** Returns the MIME type for an image file based on its extension. */
+function _imgMimeType(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  return ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp'
+       : ext === 'gif' ? 'image/gif' : ext === 'avif' ? 'image/avif' : 'image/jpeg';
+}
+
+/** Converts a base64 string (from read_cbz_entry) to a blob URL. */
+function _base64ToUrl(b64, mimeType) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+}
 
 // ── Natural sort ──────────────────────────────────────────────────────────────
 
@@ -143,9 +159,9 @@ const natCmp = (a,b) => a.localeCompare(b,undefined,{numeric:true,sensitivity:'b
 function parseChapterKey(name) {
   let vol = 0, ch = -1;
 
-  // Volume: "Vol.02", "Vol 2", "Volume 02", "Volume2"
-  const volMatch = name.match(/vol(?:ume)?[\s._-]*(\d+)/i);
-  if (volMatch) vol = parseInt(volMatch[1], 10);
+  // Volume: "Vol.02", "Vol 2", "Volume 02", "Volume2", "v03" (bare v prefix)
+  const volMatch = name.match(/(?:vol(?:ume)?|\bv)([ ._-]*(\d+))/i);
+  if (volMatch) vol = parseInt(volMatch[2], 10);
 
   // Chapter: "Ch.0006.2", "Ch 6.2", "Chapter 006", "Chapter6.5"
   const chMatch = name.match(/ch(?:apter)?[\s._-]*(\d+(?:[._]\d+)?)/i);
@@ -154,10 +170,22 @@ function parseChapterKey(name) {
     ch = parseFloat(chMatch[1].replace('_', '.'));
   }
 
-  // Fallback: first numeric run in the name (e.g. "001", "001.5")
+  // Fallback: first numeric run that isn't a 4-digit year (e.g. 2023)
+  // A bare volume number like "v03" has already been captured above so
+  // we skip any number already used as vol to avoid double-counting.
   if (ch === -1) {
-    const numMatch = name.match(/(\d+(?:[._]\d+)?)/);
-    ch = numMatch ? parseFloat(numMatch[1].replace('_', '.')) : 0;
+    // Only match standalone numbers — skip those adjacent to letters (e.g. group tags like '1r0n')
+    const numRe = /(?<!\w)(\d+(?:[._]\d+)?)(?!\w)/g;
+    let m;
+    while ((m = numRe.exec(name)) !== null) {
+      const n = parseFloat(m[1].replace('_', '.'));
+      // Skip 4-digit years and the volume number we already parsed
+      if (m[1].length === 4 && n > 1900 && n < 2100) continue;
+      if (n === vol && vol !== 0) continue;
+      ch = n;
+      break;
+    }
+    if (ch === -1) ch = 0;
   }
 
   return [vol, ch];
